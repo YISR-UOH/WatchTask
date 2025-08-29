@@ -68,13 +68,45 @@ function App() {
   const videoRef = useRef(null);
   const scannerRef = useRef(null);
 
+  function extractOffer(str) {
+    try {
+      const s = String(str || "");
+      const idx = s.indexOf("#offer=");
+      if (idx >= 0) {
+        const hash = s.slice(s.indexOf("#") + 1);
+        const params = new URLSearchParams(hash);
+        const o = params.get("offer");
+        if (o) return decodeURIComponent(o);
+      }
+      return s;
+    } catch {
+      return str;
+    }
+  }
+
+  function extractAnswer(str) {
+    try {
+      const s = String(str || "");
+      const idx = s.indexOf("#answer=");
+      if (idx >= 0) {
+        const hash = s.slice(s.indexOf("#") + 1);
+        const params = new URLSearchParams(hash);
+        const a = params.get("answer");
+        if (a) return decodeURIComponent(a);
+      }
+      return s;
+    } catch {
+      return str;
+    }
+  }
+
   // subscribe to store
   useEffect(() => {
     const unsub = subscribe((next) => setTasks(next));
     return () => unsub();
   }, []);
 
-  // If URL has #offer=..., auto-fill offerText for guest
+  // If URL has #offer=... or #answer=...
   useEffect(() => {
     const hash = window.location.hash.slice(1);
     const params = new URLSearchParams(hash);
@@ -82,6 +114,12 @@ function App() {
     if (o) {
       try {
         setOfferText(decodeURIComponent(o));
+      } catch {}
+    }
+    const a = params.get("answer");
+    if (a) {
+      try {
+        setAnswerText(decodeURIComponent(a));
       } catch {}
     }
   }, []);
@@ -92,18 +130,21 @@ function App() {
     setInput("");
   }
 
-  async function onCreateOffer() {
+  async function onCreateOffer(mode = "sdp") {
     setError("");
     try {
       const offerStr = await createOffer();
-      const encoded = encodeURIComponent(offerStr);
-      const url = `${location.origin}${location.pathname}#offer=${encoded}`;
-      // Save into state for quick copy if needed
-      setOfferText(offerStr);
-      // Lazy import qrcode to data URL for modal; or fallback to text
+      setOfferText(offerStr); // conserva para copiar
+      // Decide contenido del QR: 'sdp' (texto SDP) o 'link' (#offer=...)
+      const qrPayload =
+        mode === "link"
+          ? `${location.origin}${location.pathname}#offer=${encodeURIComponent(
+              offerStr
+            )}`
+          : offerStr;
       try {
         const QR = await import("qrcode");
-        const dataUrl = await QR.toDataURL(url);
+        const dataUrl = await QR.toDataURL(qrPayload);
         setQrUrl(dataUrl);
       } catch {
         setQrUrl("");
@@ -119,7 +160,7 @@ function App() {
   async function onAcceptAnswer() {
     setError("");
     try {
-      await acceptAnswer(answerText);
+      await acceptAnswer(extractAnswer(answerText));
       setAnswerText("");
     } catch (e) {
       setError("Respuesta inválida o conexión fallida");
@@ -127,15 +168,22 @@ function App() {
     }
   }
 
-  async function onCreateAnswer() {
+  async function onCreateAnswer(mode = "sdp") {
     setError("");
     try {
-      const ansStr = await createAnswerForOffer(offerText);
+      const offerPayload = extractOffer(offerText);
+      const ansStr = await createAnswerForOffer(offerPayload);
       setAnswerText(ansStr);
       // create QR for the answer string to show to host
       try {
         const QR = await import("qrcode");
-        const dataUrl = await QR.toDataURL(ansStr);
+        const payload =
+          mode === "link"
+            ? `${location.origin}${
+                location.pathname
+              }#answer=${encodeURIComponent(ansStr)}`
+            : ansStr;
+        const dataUrl = await QR.toDataURL(payload);
         setQrUrl(dataUrl);
       } catch {
         setQrUrl("");
@@ -181,8 +229,9 @@ function App() {
           videoRef.current,
           (result) => {
             if (!active) return;
-            if (scanMode === "offer") setOfferText(result?.data || result);
-            if (scanMode === "answer") setAnswerText(result?.data || result);
+            const scanned = result?.data || result;
+            if (scanMode === "offer") setOfferText(extractOffer(scanned));
+            if (scanMode === "answer") setAnswerText(extractAnswer(scanned));
             setScanMode(null);
             scanner.stop();
           },
@@ -271,7 +320,14 @@ function App() {
       <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
         <div>
           <h3 style={{ margin: "4px 0" }}>Modo Host</h3>
-          <button onClick={onCreateOffer}>Generar QR con oferta SDP</button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => onCreateOffer("sdp")}>
+              QR con oferta (SDP)
+            </button>
+            <button onClick={() => onCreateOffer("link")}>
+              QR con oferta (link)
+            </button>
+          </div>
           <div
             style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}
           >
@@ -319,15 +375,32 @@ function App() {
             value={offerText}
             onChange={(e) => setOfferText(e.target.value)}
           />
-          <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+          <div
+            style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}
+          >
             <button onClick={() => setScanMode("offer")}>
               Escanear oferta
             </button>
-            <button onClick={onCreateAnswer}>
-              Generar QR con respuesta SDP
+            <button onClick={() => onCreateAnswer("sdp")}>
+              QR con respuesta (SDP)
+            </button>
+            <button onClick={() => onCreateAnswer("link")}>
+              QR con respuesta (link)
             </button>
             <button onClick={() => copy(answerText)} disabled={!answerText}>
               Copiar respuesta (SDP)
+            </button>
+            <button
+              onClick={() =>
+                copy(
+                  `${location.origin}${
+                    location.pathname
+                  }#answer=${encodeURIComponent(answerText)}`
+                )
+              }
+              disabled={!answerText}
+            >
+              Copiar link con respuesta
             </button>
           </div>
         </div>
