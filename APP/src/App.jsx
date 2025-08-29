@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import QR from "qrcode";
+import qrScannerWorkerUrl from "qr-scanner/qr-scanner-worker.min.js?url";
 import {
   addTask,
   subscribe,
@@ -8,8 +10,6 @@ import {
   createOffer,
   acceptAnswer,
   createAnswerForOffer,
-  encodeForHash,
-  decodeFromHash,
   isConnected,
   getRole,
   toggleTask,
@@ -65,14 +65,14 @@ function App() {
   const [myRole, setMyRole] = useState(getRole());
   const [diag, setDiag] = useState(null);
   const [scanMode, setScanMode] = useState(null); // 'offer' | 'answer' | null
+  const [connected, setConnected] = useState(isConnected());
   const videoRef = useRef(null);
   const scannerRef = useRef(null);
 
   function extractOffer(str) {
     try {
       const s = String(str || "");
-      const idx = s.indexOf("#offer=");
-      if (idx >= 0) {
+      if (s.includes("#offer=")) {
         const hash = s.slice(s.indexOf("#") + 1);
         const params = new URLSearchParams(hash);
         const o = params.get("offer");
@@ -87,8 +87,7 @@ function App() {
   function extractAnswer(str) {
     try {
       const s = String(str || "");
-      const idx = s.indexOf("#answer=");
-      if (idx >= 0) {
+      if (s.includes("#answer=")) {
         const hash = s.slice(s.indexOf("#") + 1);
         const params = new URLSearchParams(hash);
         const a = params.get("answer");
@@ -100,13 +99,32 @@ function App() {
     }
   }
 
-  // subscribe to store
+  function copy(text) {
+    if (!text) return;
+    try {
+      navigator.clipboard?.writeText(text);
+    } catch (e) {
+      console.warn("Clipboard copy failed", e);
+    }
+  }
+
+  // subscriptions
   useEffect(() => {
     const unsub = subscribe((next) => setTasks(next));
     return () => unsub();
   }, []);
 
-  // If URL has #offer=... or #answer=...
+  useEffect(() => {
+    const off = subscribeConnection((v) => setConnected(v));
+    return () => off();
+  }, []);
+
+  useEffect(() => {
+    const off = subscribeDiagnostics((d) => setDiag(d));
+    return () => off();
+  }, []);
+
+  // If URL has #offer= or #answer=
   useEffect(() => {
     const hash = window.location.hash.slice(1);
     const params = new URLSearchParams(hash);
@@ -125,30 +143,31 @@ function App() {
   }, []);
 
   async function onAdd() {
-    if (!input.trim()) return;
-    addTask(input.trim());
-    setInput("");
+    setError("");
+    const trimmed = input.trim();
+    if (!trimmed) return;
+    try {
+      await addTask(trimmed);
+      setInput("");
+    } catch (e) {
+      setError("No se pudo agregar la tarea");
+      console.error(e);
+    }
   }
 
   async function onCreateOffer(mode = "sdp") {
     setError("");
     try {
       const offerStr = await createOffer();
-      setOfferText(offerStr); // conserva para copiar
-      // Decide contenido del QR: 'sdp' (texto SDP) o 'link' (#offer=...)
+      setOfferText(offerStr);
       const qrPayload =
         mode === "link"
           ? `${location.origin}${location.pathname}#offer=${encodeURIComponent(
               offerStr
             )}`
           : offerStr;
-      try {
-        const QR = await import("qrcode");
-        const dataUrl = await QR.toDataURL(qrPayload);
-        setQrUrl(dataUrl);
-      } catch {
-        setQrUrl("");
-      }
+      const dataUrl = await QR.toDataURL(qrPayload);
+      setQrUrl(dataUrl);
       setShowQR(true);
       setMyRole("host");
     } catch (e) {
@@ -161,9 +180,8 @@ function App() {
     setError("");
     try {
       await acceptAnswer(extractAnswer(answerText));
-      setAnswerText("");
     } catch (e) {
-      setError("Respuesta inválida o conexión fallida");
+      setError("Respuesta inválida");
       console.error(e);
     }
   }
@@ -174,20 +192,14 @@ function App() {
       const offerPayload = extractOffer(offerText);
       const ansStr = await createAnswerForOffer(offerPayload);
       setAnswerText(ansStr);
-      // create QR for the answer string to show to host
-      try {
-        const QR = await import("qrcode");
-        const payload =
-          mode === "link"
-            ? `${location.origin}${
-                location.pathname
-              }#answer=${encodeURIComponent(ansStr)}`
-            : ansStr;
-        const dataUrl = await QR.toDataURL(payload);
-        setQrUrl(dataUrl);
-      } catch {
-        setQrUrl("");
-      }
+      const payload =
+        mode === "link"
+          ? `${location.origin}${location.pathname}#answer=${encodeURIComponent(
+              ansStr
+            )}`
+          : ansStr;
+      const dataUrl = await QR.toDataURL(payload);
+      setQrUrl(dataUrl);
       setShowQR(true);
       setMyRole("guest");
     } catch (e) {
@@ -196,34 +208,16 @@ function App() {
     }
   }
 
-  function copy(text) {
-    if (!text) return;
-    try {
-      navigator.clipboard?.writeText(text);
-    } catch (e) {
-      console.warn("Clipboard copy failed", e);
-    }
-  }
-
-  const [connected, setConnected] = useState(isConnected());
-
-  useEffect(() => {
-    const off = subscribeConnection((v) => setConnected(v));
-    return () => off();
-  }, []);
-
-  useEffect(() => {
-    const off = subscribeDiagnostics((d) => setDiag(d));
-    return () => off();
-  }, []);
-
-  // QR Scan handling
+  // QR Scanner lifecycle
   useEffect(() => {
     let active = true;
     (async () => {
       if (!scanMode) return;
       try {
         const { default: QrScanner } = await import("qr-scanner");
+        try {
+          QrScanner.WORKER_PATH = qrScannerWorkerUrl;
+        } catch {}
         if (!videoRef.current) return;
         const scanner = new QrScanner(
           videoRef.current,
