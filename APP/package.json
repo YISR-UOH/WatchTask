@@ -1,0 +1,20 @@
+{
+  "name": "watchtask",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "y-webrtc": "^10.6.6",
+    "yjs": "^13.6.14"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.0",
+    "vite": "^4.5.0"
+  }
+}
