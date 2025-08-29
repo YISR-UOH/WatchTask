@@ -12,7 +12,7 @@ function App() {
 
   return (
     <div style={{ padding: "1rem" }}>
-      <h1>📡 App P2P de Tareas</h1>
+      <h1>📡 App P2P de Tareas.</h1>
       <ul>
         {Object.entries(list).map(([id, t]) => (
           <li key={id}>
