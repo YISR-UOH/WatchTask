@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   addTask,
   subscribe,
+  subscribeConnection,
+  subscribeDiagnostics,
   getTasks,
   createOffer,
   acceptAnswer,
@@ -10,6 +12,7 @@ import {
   decodeFromHash,
   isConnected,
   getRole,
+  toggleTask,
 } from "./p2p/store";
 
 function Modal({ open, onClose, children }) {
@@ -60,6 +63,10 @@ function App() {
   const [offerText, setOfferText] = useState("");
   const [answerText, setAnswerText] = useState("");
   const [myRole, setMyRole] = useState(getRole());
+  const [diag, setDiag] = useState(null);
+  const [scanMode, setScanMode] = useState(null); // 'offer' | 'answer' | null
+  const videoRef = useRef(null);
+  const scannerRef = useRef(null);
 
   // subscribe to store
   useEffect(() => {
@@ -91,6 +98,8 @@ function App() {
       const offerStr = await createOffer();
       const encoded = encodeURIComponent(offerStr);
       const url = `${location.origin}${location.pathname}#offer=${encoded}`;
+      // Save into state for quick copy if needed
+      setOfferText(offerStr);
       // Lazy import qrcode to data URL for modal; or fallback to text
       try {
         const QR = await import("qrcode");
@@ -122,6 +131,7 @@ function App() {
     setError("");
     try {
       const ansStr = await createAnswerForOffer(offerText);
+      setAnswerText(ansStr);
       // create QR for the answer string to show to host
       try {
         const QR = await import("qrcode");
@@ -138,7 +148,64 @@ function App() {
     }
   }
 
-  const connected = useMemo(() => isConnected(), [tasks]);
+  function copy(text) {
+    if (!text) return;
+    try {
+      navigator.clipboard?.writeText(text);
+    } catch (e) {
+      console.warn("Clipboard copy failed", e);
+    }
+  }
+
+  const [connected, setConnected] = useState(isConnected());
+
+  useEffect(() => {
+    const off = subscribeConnection((v) => setConnected(v));
+    return () => off();
+  }, []);
+
+  useEffect(() => {
+    const off = subscribeDiagnostics((d) => setDiag(d));
+    return () => off();
+  }, []);
+
+  // QR Scan handling
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      if (!scanMode) return;
+      try {
+        const { default: QrScanner } = await import("qr-scanner");
+        if (!videoRef.current) return;
+        const scanner = new QrScanner(
+          videoRef.current,
+          (result) => {
+            if (!active) return;
+            if (scanMode === "offer") setOfferText(result?.data || result);
+            if (scanMode === "answer") setAnswerText(result?.data || result);
+            setScanMode(null);
+            scanner.stop();
+          },
+          { returnDetailedScanResult: true }
+        );
+        scannerRef.current = scanner;
+        await scanner.start();
+      } catch (e) {
+        console.error("QR scan error", e);
+        setError("No se pudo iniciar la cámara para leer QR");
+        setScanMode(null);
+      }
+    })();
+    return () => {
+      active = false;
+      if (scannerRef.current) {
+        try {
+          scannerRef.current.stop();
+        } catch {}
+        scannerRef.current = null;
+      }
+    };
+  }, [scanMode]);
 
   return (
     <div
@@ -181,9 +248,20 @@ function App() {
         {Object.values(tasks)
           .sort((a, b) => a.createdAt - b.createdAt)
           .map((t) => (
-            <li key={t.id}>
-              {t.text}
-              {t.done ? " ✅" : ""}
+            <li
+              key={t.id}
+              style={{ display: "flex", alignItems: "center", gap: 8 }}
+            >
+              <input
+                type="checkbox"
+                checked={!!t.done}
+                onChange={() => toggleTask(t.id)}
+              />
+              <span
+                style={{ textDecoration: t.done ? "line-through" : "none" }}
+              >
+                {t.text}
+              </span>
             </li>
           ))}
       </ul>
@@ -194,6 +272,25 @@ function App() {
         <div>
           <h3 style={{ margin: "4px 0" }}>Modo Host</h3>
           <button onClick={onCreateOffer}>Generar QR con oferta SDP</button>
+          <div
+            style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}
+          >
+            <button onClick={() => copy(offerText)} disabled={!offerText}>
+              Copiar oferta (SDP)
+            </button>
+            <button
+              onClick={() =>
+                copy(
+                  `${location.origin}${
+                    location.pathname
+                  }#offer=${encodeURIComponent(offerText)}`
+                )
+              }
+              disabled={!offerText}
+            >
+              Copiar link con oferta
+            </button>
+          </div>
           <div style={{ marginTop: 8 }}>
             <label>Respuesta del invitado (pegar texto del QR):</label>
             <textarea
@@ -203,7 +300,12 @@ function App() {
               value={answerText}
               onChange={(e) => setAnswerText(e.target.value)}
             />
-            <button onClick={onAcceptAnswer}>Aceptar respuesta</button>
+            <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+              <button onClick={() => setScanMode("answer")}>
+                Escanear respuesta
+              </button>
+              <button onClick={onAcceptAnswer}>Aceptar respuesta</button>
+            </div>
           </div>
         </div>
 
@@ -217,7 +319,17 @@ function App() {
             value={offerText}
             onChange={(e) => setOfferText(e.target.value)}
           />
-          <button onClick={onCreateAnswer}>Generar QR con respuesta SDP</button>
+          <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+            <button onClick={() => setScanMode("offer")}>
+              Escanear oferta
+            </button>
+            <button onClick={onCreateAnswer}>
+              Generar QR con respuesta SDP
+            </button>
+            <button onClick={() => copy(answerText)} disabled={!answerText}>
+              Copiar respuesta (SDP)
+            </button>
+          </div>
         </div>
       </div>
 
@@ -231,6 +343,33 @@ function App() {
           </p>
         )}
       </Modal>
+
+      <Modal open={!!scanMode} onClose={() => setScanMode(null)}>
+        <div style={{ display: "grid", gap: 8 }}>
+          <p>
+            Escaneando{" "}
+            {scanMode === "offer"
+              ? "oferta del host"
+              : "respuesta del invitado"}
+            ...
+          </p>
+          <video
+            ref={videoRef}
+            style={{ width: "100%", background: "#000" }}
+            muted
+            playsInline
+          />
+        </div>
+      </Modal>
+
+      {diag && (
+        <details style={{ marginTop: 12 }}>
+          <summary>Diagnóstico de conexión</summary>
+          <pre style={{ whiteSpace: "pre-wrap" }}>
+            {JSON.stringify(diag, null, 2)}
+          </pre>
+        </details>
+      )}
     </div>
   );
 }
