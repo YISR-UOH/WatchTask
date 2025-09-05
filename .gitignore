@@ -1,0 +1,90 @@
+# Sistema operativo (macOS / Windows)
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs y temporales
+logs/
+*.log
+*.pid
+*.seed
+*.pid.lock
+*.tmp
+tmp/
+temp/
+.cache/
+.parcel-cache
+.eslintcache
+
+# Entornos y secretos
+.env
+.env.*
+!.env.example
+.envrc
+.direnv
+
+# Node / Frontend
+node_modules/
+dist/
+out/
+coverage/
+.nyc_output/
+.next/
+.nuxt/
+.svelte-kit/
+.storybook/
+.rpt2_cache/
+.tsbuildinfo
+vite.config.ts.timestamp-*
+.vite/
+vite-cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.coverage*
+htmlcov/
+.eggs/
+*.egg-info/
+pip-wheel-metadata/
+
+# Java / Kotlin (Gradle / Maven)
+*.class
+.gradle/
+build/
+.mvn/
+target/
+
+# Swift / Xcode / SwiftPM
+DerivedData/
+xcuserdata/
+*.xcworkspace/xcuserdata
+*.xcuserstate
+*.xcuserdatad
+*.xcscmblueprint
+.swiftpm/
+.build/
+Package.resolved
+
+# IDEs / editores
+.vscode/
+.idea/
+*.iml
+*.suo
+*.user
+*.sw?
+*.orig
