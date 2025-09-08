@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+/* Estilos base mínimos complementarios */
+body {
+  @apply bg-gray-50 text-gray-800 antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+.card {
+  @apply bg-white shadow-sm border border-gray-200 rounded-lg p-4;
+}
+
+.btn {
+  @apply inline-flex items-center gap-1 rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+}
+.btn-primary {
+  @apply bg-blue-600 text-white hover:bg-blue-500 active:bg-blue-700;
+}
+.btn-outline {
+  @apply border border-blue-600 text-blue-700 hover:bg-blue-50 active:bg-blue-100;
+}
+
+.heading {
+  @apply text-xl font-semibold text-blue-700 mb-2;
+}
+
+.muted {
+  @apply text-sm text-gray-500;
+}
+
+ul.messages {
+  @apply space-y-1 mt-4 text-sm max-h-72 overflow-auto pr-1;
+}
+ul.messages li {
+  @apply bg-white border border-gray-200 rounded-md px-3 py-1;
+}
