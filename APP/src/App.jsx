@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { processAndStorePdf } from "./utils/pdfUtils";
 import { openDB } from "idb";
-import Connection from "@/components/Connection"; // legacy global connection
 import PeerMesh from "@/components/PeerMesh"; // new peer discovery mesh
 import "@/style/style.css";
 export default function App() {
@@ -84,7 +83,6 @@ export default function App() {
           </div>
         </section>
         <section className="card md:col-span-1 lg:col-span-2 flex flex-col gap-6">
-          <Connection />
           <PeerMesh />
         </section>
       </main>

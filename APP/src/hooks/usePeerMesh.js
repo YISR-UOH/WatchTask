@@ -192,6 +192,47 @@ export function usePeerMesh({ autoStart = true } = {}) {
   const createConnectionToPeer = useCallback(
     (targetId) => {
       const pc = new RTCPeerConnection();
+      const setupChannel = (dc) => {
+        peerConnectionsRef.current[targetId].dc = dc;
+        setPeers((p) => ({
+          ...p,
+          [targetId]: { ...(p[targetId] || {}), state: dc.readyState },
+        }));
+        dc.onopen = () => {
+          setPeers((p) => ({
+            ...p,
+            [targetId]: { ...(p[targetId] || {}), state: "open" },
+          }));
+          log(`Canal abierto con ${targetId}`);
+          if (profile) {
+            dc.send(JSON.stringify({ __type: "profile", profile }));
+          }
+          if (knownProfiles.length && !profilesSentRef.current[targetId]) {
+            dc.send(
+              JSON.stringify({
+                __type: "profilesSync",
+                profiles: knownProfiles,
+              })
+            );
+            profilesSentRef.current[targetId] = true;
+            log(`ProfilesSync enviado onopen a ${targetId}`);
+          }
+          if (pendingValidationRef.current) {
+            const { code, password } = pendingValidationRef.current;
+            dc.send(
+              JSON.stringify({ __type: "loginValidateRequest", code, password })
+            );
+          }
+        };
+        dc.onmessage = (e) => handleDataMessage(targetId, e.data);
+        dc.onclose = () =>
+          setPeers((p) => ({
+            ...p,
+            [targetId]: { ...(p[targetId] || {}), state: "closed" },
+          }));
+      };
+
+      // create outbound channel (caller side) immediately
       const dataChannel = pc.createDataChannel("mesh");
       peerConnectionsRef.current[targetId] = {
         pc,
@@ -202,37 +243,13 @@ export function usePeerMesh({ autoStart = true } = {}) {
         ...p,
         [targetId]: { ...(p[targetId] || {}), state: "connecting" },
       }));
+      setupChannel(dataChannel);
 
-      dataChannel.onopen = async () => {
-        setPeers((p) => ({
-          ...p,
-          [targetId]: { ...(p[targetId] || {}), state: "open" },
-        }));
-        log(`Canal abierto con ${targetId}`);
-        if (profile) {
-          dataChannel.send(JSON.stringify({ __type: "profile", profile }));
-        }
-        // Siempre enviar snapshot de perfiles locales (aunque no haya login) para bootstrap inmediato
-        if (knownProfiles.length) {
-          dataChannel.send(
-            JSON.stringify({ __type: "profilesSync", profiles: knownProfiles })
-          );
-          profilesSentRef.current[targetId] = true;
-        }
-        // reenviar solicitud de validación si estaba pendiente
-        if (pendingValidationRef.current) {
-          const { code, password } = pendingValidationRef.current;
-          dataChannel.send(
-            JSON.stringify({ __type: "loginValidateRequest", code, password })
-          );
-        }
+      // handle inbound channel (callee side)
+      pc.ondatachannel = (ev) => {
+        if (!peerConnectionsRef.current[targetId]) return;
+        setupChannel(ev.channel);
       };
-      dataChannel.onmessage = (e) => handleDataMessage(targetId, e.data);
-      dataChannel.onclose = () =>
-        setPeers((p) => ({
-          ...p,
-          [targetId]: { ...(p[targetId] || {}), state: "closed" },
-        }));
 
       pc.onicecandidate = (ev) => {
         if (ev.candidate) {
@@ -254,7 +271,7 @@ export function usePeerMesh({ autoStart = true } = {}) {
       listenRemoteOffersAnswers(targetId, pc);
       listenRemoteCandidates(targetId, pc);
     },
-    [log, profile, peerId]
+    [log, profile, peerId, knownProfiles, handleDataMessage]
   );
 
   const negotiate = useCallback(
