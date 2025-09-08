@@ -56,6 +56,7 @@ export function usePeerMesh({ autoStart = true } = {}) {
   const profilesSentRef = useRef({}); // peerId -> boolean
   const unsubPeersRef = useRef(null);
   const isAdminRef = useRef(false);
+  const profileRequestTimerRef = useRef(null); // interval id for requestProfiles retries
 
   // UTIL LOG
   const log = useCallback((m) => setMessages((prev) => [...prev, m]), []);
@@ -96,6 +97,28 @@ export function usePeerMesh({ autoStart = true } = {}) {
         }
         if (msg.__type === "profilesSync" && Array.isArray(msg.profiles)) {
           msg.profiles.forEach((pf) => storeProfile(pf));
+          return;
+        }
+        if (msg.__type === "requestProfiles") {
+          // remote solicita base de perfiles
+          if (knownProfiles.length) {
+            const entry = peerConnectionsRef.current[fromId];
+            if (
+              entry?.dc?.readyState === "open" &&
+              !profilesSentRef.current[fromId]
+            ) {
+              entry.dc.send(
+                JSON.stringify({
+                  __type: "profilesSync",
+                  profiles: knownProfiles,
+                })
+              );
+              profilesSentRef.current[fromId] = true;
+              log(
+                `[sync:respond] Enviado profilesSync a ${fromId} tras request`
+              );
+            }
+          }
           return;
         }
         if (msg.__type === "loginValidateRequest") {
@@ -268,6 +291,11 @@ export function usePeerMesh({ autoStart = true } = {}) {
             profilesSentRef.current[targetId] = true;
             log(`ProfilesSync enviado onopen a ${targetId}`);
           }
+          if (!knownProfiles.length) {
+            // no tenemos perfiles aún: solicitarlos inmediatamente
+            dc.send(JSON.stringify({ __type: "requestProfiles" }));
+            log(`[sync:request] requestProfiles inicial a ${targetId}`);
+          }
           if (pendingValidationRef.current) {
             const { code, password } = pendingValidationRef.current;
             dc.send(
@@ -414,6 +442,49 @@ export function usePeerMesh({ autoStart = true } = {}) {
     });
   }, [knownProfiles, log]);
 
+  // Retry loop: si no tenemos perfiles aún, cada 2.5s solicitar a peers abiertos (máx 8 intentos)
+  useEffect(() => {
+    if (knownProfiles.length) {
+      if (profileRequestTimerRef.current) {
+        clearInterval(profileRequestTimerRef.current);
+        profileRequestTimerRef.current = null;
+      }
+      return;
+    }
+    // verificar si hay algún canal abierto
+    const hasOpen = Object.values(peerConnectionsRef.current).some(
+      ({ dc }) => dc?.readyState === "open"
+    );
+    if (!hasOpen) return; // esperar a que se abra alguno
+    if (profileRequestTimerRef.current) return; // ya corriendo
+    let attempts = 0;
+    profileRequestTimerRef.current = setInterval(() => {
+      if (knownProfiles.length) {
+        clearInterval(profileRequestTimerRef.current);
+        profileRequestTimerRef.current = null;
+        return;
+      }
+      attempts++;
+      Object.entries(peerConnectionsRef.current).forEach(([id, { dc }]) => {
+        if (dc?.readyState === "open") {
+          dc.send(JSON.stringify({ __type: "requestProfiles" }));
+        }
+      });
+      log(`[sync:retry] requestProfiles intento ${attempts}`);
+      if (attempts >= 8) {
+        clearInterval(profileRequestTimerRef.current);
+        profileRequestTimerRef.current = null;
+        log(`[sync:retry] máximo de intentos alcanzado`);
+      }
+    }, 2500);
+    return () => {
+      if (profileRequestTimerRef.current) {
+        clearInterval(profileRequestTimerRef.current);
+        profileRequestTimerRef.current = null;
+      }
+    };
+  }, [knownProfiles, log]);
+
   // INITIALIZATION
   useEffect(() => {
     if (!autoStart) return;
@@ -426,6 +497,10 @@ export function usePeerMesh({ autoStart = true } = {}) {
     return () => {
       if (unsubPeersRef.current) unsubPeersRef.current();
       Object.values(peerConnectionsRef.current).forEach(({ pc }) => pc.close());
+      if (profileRequestTimerRef.current) {
+        clearInterval(profileRequestTimerRef.current);
+        profileRequestTimerRef.current = null;
+      }
     };
   }, [
     autoStart,
