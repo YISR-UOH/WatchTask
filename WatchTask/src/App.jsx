@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { processAndStorePdf } from "./utils/pdfUtils";
 import { openDB } from "idb";
-
+import Chat from "@/components/chat";
 export default function App() {
   const [numOrders, setNumOrders] = useState(0);
-  // mostrar la cantidad de elementos en la base de datos
   const [lenDB, setLenDB] = useState(0);
+
   useEffect(() => {
     if (navigator.storage && navigator.storage.persist) {
       navigator.storage.persist().then((persistent) => {
@@ -17,12 +17,11 @@ export default function App() {
       });
     }
   }, []);
-
-  // Actualizar cantidad de elementos en la base de datos
   useEffect(() => {
     async function updateCount() {
       const db = await openDB("pdfDataDB", 1);
       const count = await db.count("pdfData");
+
       setLenDB(count);
     }
     updateCount();
@@ -43,6 +42,7 @@ export default function App() {
       />
       <p>Órdenes procesadas: {numOrders}</p>
       <p>Elementos en la base de datos: {lenDB}</p>
+      <Chat />
     </div>
   );
 }
