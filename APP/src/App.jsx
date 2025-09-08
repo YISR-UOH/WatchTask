@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { processAndStorePdf } from "./utils/pdfUtils";
 import { openDB } from "idb";
-import Chat from "@/components/Connection";
+import Connection from "@/components/Connection";
 import "@/style/style.css";
 export default function App() {
   const [numOrders, setNumOrders] = useState(0);
@@ -83,7 +83,7 @@ export default function App() {
           </div>
         </section>
         <section className="card md:col-span-1 lg:col-span-2">
-          <Chat />
+          <Connection />
         </section>
       </main>
       <footer className="mt-auto bg-white border-t border-gray-200">
