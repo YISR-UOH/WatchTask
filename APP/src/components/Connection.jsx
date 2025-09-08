@@ -84,16 +84,27 @@ function Connection() {
     setMessages((m) => [...m, "Peer: " + data]);
   };
 
-  const storeReceivedData = async (data) => {
-    try {
-      const dbLocal = await openDB("pdfDataDB", 1, {
-        upgrade(db) {
-          if (!db.objectStoreNames.contains("pdfData")) {
-            db.createObjectStore("pdfData", { keyPath: "id" });
+  // Garantiza que exista el object store "pdfData" incluso si la DB ya fue creada antes sin él
+  const getPdfDB = async () => {
+    let dbLocal = await openDB("pdfDataDB");
+    if (!dbLocal.objectStoreNames.contains("pdfData")) {
+      const newVersion = dbLocal.version + 1; // bump version para disparar upgrade
+      dbLocal.close();
+      dbLocal = await openDB("pdfDataDB", newVersion, {
+        upgrade(upgradeDb) {
+          if (!upgradeDb.objectStoreNames.contains("pdfData")) {
+            upgradeDb.createObjectStore("pdfData", { keyPath: "id" });
           }
         },
       });
-      if (Array.isArray(data)) {
+    }
+    return dbLocal;
+  };
+
+  const storeReceivedData = async (data) => {
+    try {
+      const dbLocal = await getPdfDB();
+      if (Array.isArray(data) && data.length) {
         const tx = dbLocal.transaction("pdfData", "readwrite");
         for (const item of data) await tx.store.put(item);
         await tx.done;
@@ -181,16 +192,9 @@ function Connection() {
 
   // Leer todos los registros de IndexedDB
   const readAllPdfData = async () => {
-    const dbLocal = await openDB("pdfDataDB", 1, {
-      upgrade(db) {
-        if (!db.objectStoreNames.contains("pdfData")) {
-          db.createObjectStore("pdfData", { keyPath: "id" });
-        }
-      },
-    });
+    const dbLocal = await getPdfDB();
     const tx = dbLocal.transaction("pdfData", "readonly");
-    const all = await tx.store.getAll();
-    return all;
+    return await tx.store.getAll();
   };
 
   const chunkAndSend = async (obj) => {
