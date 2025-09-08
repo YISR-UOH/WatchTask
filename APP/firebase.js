@@ -1,5 +1,16 @@
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, set, onValue, push } from "firebase/database";
+import {
+  getDatabase,
+  ref,
+  set,
+  onValue,
+  push,
+  remove,
+  onDisconnect,
+  update,
+  get,
+  child,
+} from "firebase/database";
 
 const firebaseConfig = {
   apiKey: "",
@@ -13,4 +24,5 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const db = getDatabase(app);
-export { ref, set, onValue, push };
+// Re-export commonly used realtime DB helpers (explicit for tree-shaking clarity)
+export { ref, set, onValue, push, remove, onDisconnect, update, get, child };

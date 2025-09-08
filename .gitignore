@@ -88,3 +88,6 @@ Package.resolved
 *.user
 *.sw?
 *.orig
+
+# Otros copilot-instructions
+.github/copilot-instructions.md

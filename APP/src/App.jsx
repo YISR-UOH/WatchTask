@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { processAndStorePdf } from "./utils/pdfUtils";
 import { openDB } from "idb";
-import Connection from "@/components/Connection";
+import Connection from "@/components/Connection"; // legacy global connection
+import PeerMesh from "@/components/PeerMesh"; // new peer discovery mesh
 import "@/style/style.css";
 export default function App() {
   const [numOrders, setNumOrders] = useState(0);
@@ -82,13 +83,14 @@ export default function App() {
             </div>
           </div>
         </section>
-        <section className="card md:col-span-1 lg:col-span-2">
+        <section className="card md:col-span-1 lg:col-span-2 flex flex-col gap-6">
           <Connection />
+          <PeerMesh />
         </section>
       </main>
       <footer className="mt-auto bg-white border-t border-gray-200">
         <div className="max-w-5xl mx-auto px-4 py-3 text-xs text-gray-500 flex items-center justify-between">
-          <span>© {new Date().getFullYear()} WatchTask v0.0.2</span>
+          <span>© {new Date().getFullYear()} WatchTask v0.0.4.0</span>
           <span>Tailwind UI básico</span>
         </div>
       </footer>
