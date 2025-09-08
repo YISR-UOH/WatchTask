@@ -53,6 +53,7 @@ export function usePeerMesh({ autoStart = true } = {}) {
   const pendingValidationRef = useRef(null); // code awaiting remote validation
 
   const peerConnectionsRef = useRef({}); // peerId -> { pc, dc }
+  const profilesSentRef = useRef({}); // peerId -> boolean
   const unsubPeersRef = useRef(null);
   const isAdminRef = useRef(false);
 
@@ -216,6 +217,7 @@ export function usePeerMesh({ autoStart = true } = {}) {
           dataChannel.send(
             JSON.stringify({ __type: "profilesSync", profiles: knownProfiles })
           );
+          profilesSentRef.current[targetId] = true;
         }
         // reenviar solicitud de validación si estaba pendiente
         if (pendingValidationRef.current) {
@@ -378,6 +380,20 @@ export function usePeerMesh({ autoStart = true } = {}) {
     },
     [log]
   );
+
+  // Envío diferido: cuando se cargan perfiles y hay canales abiertos que aún no recibieron
+  useEffect(() => {
+    if (!knownProfiles.length) return;
+    Object.entries(peerConnectionsRef.current).forEach(([id, { dc }]) => {
+      if (dc?.readyState === "open" && !profilesSentRef.current[id]) {
+        dc.send(
+          JSON.stringify({ __type: "profilesSync", profiles: knownProfiles })
+        );
+        profilesSentRef.current[id] = true;
+        log(`ProfilesSync enviado diferido a ${id}`);
+      }
+    });
+  }, [knownProfiles, log]);
 
   // INITIALIZATION
   useEffect(() => {
