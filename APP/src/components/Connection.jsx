@@ -85,20 +85,58 @@ function Connection() {
   };
 
   // Garantiza que exista el object store "pdfData" incluso si la DB ya fue creada antes sin él
+  let pdfDbPromise = null; // singleton
   const getPdfDB = async () => {
-    let dbLocal = await openDB("pdfDataDB");
-    if (!dbLocal.objectStoreNames.contains("pdfData")) {
-      const newVersion = dbLocal.version + 1; // bump version para disparar upgrade
-      dbLocal.close();
-      dbLocal = await openDB("pdfDataDB", newVersion, {
-        upgrade(upgradeDb) {
-          if (!upgradeDb.objectStoreNames.contains("pdfData")) {
-            upgradeDb.createObjectStore("pdfData", { keyPath: "id" });
+    if (pdfDbPromise) return pdfDbPromise;
+    pdfDbPromise = (async () => {
+      // primer open para conocer versión existente
+      let db = await openDB("pdfDataDB");
+      if (!db.objectStoreNames.contains("pdfData")) {
+        const targetVersion = db.version + 1;
+        const prevVersion = db.version;
+        db.close();
+        try {
+          db = await openDB("pdfDataDB", targetVersion, {
+            upgrade(upgradeDb) {
+              if (!upgradeDb.objectStoreNames.contains("pdfData")) {
+                upgradeDb.createObjectStore("pdfData", { keyPath: "id" });
+              }
+            },
+          });
+          console.info(
+            `[IndexedDB] pdfData store creado (v${prevVersion} -> v${targetVersion})`
+          );
+        } catch (e) {
+          console.warn("Reintento creación store tras fallo de upgrade", e);
+          // segundo intento simple: abrir nuevamente y comprobar; si aún no existe se vuelve a intentar con +1
+          let temp = await openDB("pdfDataDB");
+          if (!temp.objectStoreNames.contains("pdfData")) {
+            const newV = temp.version + 1;
+            temp.close();
+            db = await openDB("pdfDataDB", newV, {
+              upgrade(upgradeDb2) {
+                if (!upgradeDb2.objectStoreNames.contains("pdfData")) {
+                  upgradeDb2.createObjectStore("pdfData", { keyPath: "id" });
+                }
+              },
+            });
+            console.info(
+              `[IndexedDB] pdfData store creado en reintento (v${newV})`
+            );
+          } else {
+            db = temp; // store apareció (otra pestaña lo creó)
           }
-        },
-      });
+        }
+      }
+      return db;
+    })();
+    try {
+      return await pdfDbPromise;
+    } catch (err) {
+      // reset para permitir otro intento futuro
+      pdfDbPromise = null;
+      throw err;
     }
-    return dbLocal;
   };
 
   const storeReceivedData = async (data) => {
@@ -110,7 +148,25 @@ function Connection() {
         await tx.done;
       }
     } catch (e) {
-      console.warn("No se pudo almacenar dataset recibido", e);
+      if (e && e.name === "NotFoundError") {
+        console.warn(
+          "Object store 'pdfData' aún inexistente tras upgrade; limpiando caché de promesa y reintentando"
+        );
+        pdfDbPromise = null;
+        try {
+          const retryDb = await getPdfDB();
+          if (Array.isArray(data) && data.length) {
+            const tx2 = retryDb.transaction("pdfData", "readwrite");
+            for (const item of data) await tx2.store.put(item);
+            await tx2.done;
+            return;
+          }
+        } catch (e2) {
+          console.warn("Reintento también falló", e2);
+        }
+      } else {
+        console.warn("No se pudo almacenar dataset recibido", e);
+      }
     }
   };
 
