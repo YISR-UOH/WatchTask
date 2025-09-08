@@ -141,7 +141,16 @@ function Connection() {
 
   const storeReceivedData = async (data) => {
     try {
+      console.time("store");
       const dbLocal = await getPdfDB();
+      console.log(
+        "Version DB",
+        dbLocal.name,
+        dbLocal.version,
+        dbLocal.objectStoreNames
+      );
+      const tx = dbLocal.transaction("pdfData", "readwrite"); // <- si peta aquí es el guardado
+      console.timeEnd("store");
       if (Array.isArray(data) && data.length) {
         const tx = dbLocal.transaction("pdfData", "readwrite");
         for (const item of data) await tx.store.put(item);
