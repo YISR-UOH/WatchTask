@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { processAndStorePdf } from "./utils/pdfUtils";
 import { openDB } from "idb";
-import Chat from "@/components/chat";
+import Chat from "@/components/Chat";
 export default function App() {
   const [numOrders, setNumOrders] = useState(0);
   const [lenDB, setLenDB] = useState(0);
