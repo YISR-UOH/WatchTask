@@ -2,7 +2,7 @@ import * as pdfjsLib from "pdfjs-dist";
 import { openDB } from "idb";
 
 // Worker local in public folder
-pdfjsLib.GlobalWorkerOptions.workerSrc = "/WatchTask/pdf.worker.min.js";
+pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
 
 // 1. Extraer texto de PDF
 async function extractTextFromPdf(file) {
