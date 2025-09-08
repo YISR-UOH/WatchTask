@@ -1,5 +1,5 @@
 import React, { useState, useRef } from "react";
-import { db, ref, set, onValue, push } from "./firebase";
+import { db, ref, set, onValue, push } from "../../firebase";
 
 function Chat() {
   const [roomId, setRoomId] = useState("");
