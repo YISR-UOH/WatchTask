@@ -337,6 +337,7 @@ export function usePeerMesh({ autoStart = true } = {}) {
     [peerId]
   );
 
+  // Mover arriba para evitar TDZ cuando se usa en setupChannel antes de su inicialización en bundle
   const handleDataMessage = useCallback(
     (fromId, raw) => {
       try {
@@ -353,7 +354,6 @@ export function usePeerMesh({ autoStart = true } = {}) {
           msg.profiles.forEach((pf) => storeProfile(pf));
           return;
         }
-        // requestProfiles ya no es necesario: se envía siempre en onopen
         if (msg.__type === "loginValidateRequest") {
           const { code, password } = msg;
           (async () => {
