@@ -81,6 +81,57 @@ export function usePeerMesh({ autoStart = true } = {}) {
     [refreshProfiles, log]
   );
 
+  // Definir antes de createConnectionToPeer para evitar ReferenceError en array de dependencias
+  const handleDataMessage = useCallback(
+    (fromId, raw) => {
+      try {
+        const msg = JSON.parse(raw);
+        if (msg.__type === "profile") {
+          setPeers((p) => ({
+            ...p,
+            [fromId]: { ...(p[fromId] || {}), profile: msg.profile },
+          }));
+          storeProfile(msg.profile);
+          return;
+        }
+        if (msg.__type === "profilesSync" && Array.isArray(msg.profiles)) {
+          msg.profiles.forEach((pf) => storeProfile(pf));
+          return;
+        }
+        if (msg.__type === "loginValidateRequest") {
+          const { code, password } = msg;
+          (async () => {
+            const dbp = await getProfilesDB();
+            const pf = await dbp.get(PROFILES_STORE, code);
+            const ok = !!pf && (!pf.password || pf.password === password);
+            const entry = peerConnectionsRef.current[fromId];
+            if (entry?.dc?.readyState === "open") {
+              entry.dc.send(
+                JSON.stringify({ __type: "loginValidateResult", code, ok })
+              );
+            }
+          })();
+          return;
+        }
+        if (msg.__type === "loginValidateResult") {
+          if (
+            pendingValidationRef.current &&
+            pendingValidationRef.current.code === msg.code &&
+            msg.ok
+          ) {
+            setLoginValidated(true);
+            pendingValidationRef.current = null;
+            setStatus("login validado (remoto)");
+            log("Login validado remotamente");
+          }
+          return;
+        }
+      } catch {}
+      log(`${fromId}: ${raw}`);
+    },
+    [log, storeProfile, knownProfiles]
+  );
+
   // Seed root admin (testing) code 1111 / pass 1234
   const seedRootAdmin = useCallback(async () => {
     try {
@@ -338,55 +389,6 @@ export function usePeerMesh({ autoStart = true } = {}) {
   );
 
   // Mover arriba para evitar TDZ cuando se usa en setupChannel antes de su inicialización en bundle
-  const handleDataMessage = useCallback(
-    (fromId, raw) => {
-      try {
-        const msg = JSON.parse(raw);
-        if (msg.__type === "profile") {
-          setPeers((p) => ({
-            ...p,
-            [fromId]: { ...(p[fromId] || {}), profile: msg.profile },
-          }));
-          storeProfile(msg.profile);
-          return;
-        }
-        if (msg.__type === "profilesSync" && Array.isArray(msg.profiles)) {
-          msg.profiles.forEach((pf) => storeProfile(pf));
-          return;
-        }
-        if (msg.__type === "loginValidateRequest") {
-          const { code, password } = msg;
-          (async () => {
-            const dbp = await getProfilesDB();
-            const pf = await dbp.get(PROFILES_STORE, code);
-            const ok = !!pf && (!pf.password || pf.password === password);
-            const entry = peerConnectionsRef.current[fromId];
-            if (entry?.dc?.readyState === "open") {
-              entry.dc.send(
-                JSON.stringify({ __type: "loginValidateResult", code, ok })
-              );
-            }
-          })();
-          return;
-        }
-        if (msg.__type === "loginValidateResult") {
-          if (
-            pendingValidationRef.current &&
-            pendingValidationRef.current.code === msg.code &&
-            msg.ok
-          ) {
-            setLoginValidated(true);
-            pendingValidationRef.current = null;
-            setStatus("login validado (remoto)");
-            log("Login validado remotamente");
-          }
-          return;
-        }
-      } catch {}
-      log(`${fromId}: ${raw}`);
-    },
-    [log, storeProfile, knownProfiles]
-  );
 
   const broadcast = useCallback(
     (text) => {
