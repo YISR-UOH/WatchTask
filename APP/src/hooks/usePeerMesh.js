@@ -211,14 +211,11 @@ export function usePeerMesh({ autoStart = true } = {}) {
         if (profile) {
           dataChannel.send(JSON.stringify({ __type: "profile", profile }));
         }
-        // Admin envía lista completa de perfiles para sincronizar
-        if (isAdminRef.current && knownProfiles.length) {
+        // Siempre enviar snapshot de perfiles locales (aunque no haya login) para bootstrap inmediato
+        if (knownProfiles.length) {
           dataChannel.send(
             JSON.stringify({ __type: "profilesSync", profiles: knownProfiles })
           );
-        } else if (!isAdminRef.current && !knownProfiles.length) {
-          // solicitar perfiles si aún no tenemos
-          dataChannel.send(JSON.stringify({ __type: "requestProfiles" }));
         }
         // reenviar solicitud de validación si estaba pendiente
         if (pendingValidationRef.current) {
@@ -337,20 +334,7 @@ export function usePeerMesh({ autoStart = true } = {}) {
           msg.profiles.forEach((pf) => storeProfile(pf));
           return;
         }
-        if (msg.__type === "requestProfiles") {
-          if (isAdminRef.current && knownProfiles.length) {
-            const entry = peerConnectionsRef.current[fromId];
-            if (entry?.dc?.readyState === "open") {
-              entry.dc.send(
-                JSON.stringify({
-                  __type: "profilesSync",
-                  profiles: knownProfiles,
-                })
-              );
-            }
-          }
-          return;
-        }
+        // requestProfiles ya no es necesario: se envía siempre en onopen
         if (msg.__type === "loginValidateRequest") {
           const { code, password } = msg;
           (async () => {
