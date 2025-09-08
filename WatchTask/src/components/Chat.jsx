@@ -1,80 +1,108 @@
-import React, { useEffect, useRef, useState } from "react";
-
-const SIGNAL_SERVER = "wss://tu-proyecto.vercel.app/api/ws";
+import React, { useState, useRef } from "react";
+import { db, ref, set, onValue, push } from "./firebase";
 
 function Chat() {
+  const [roomId, setRoomId] = useState("");
   const [messages, setMessages] = useState([]);
-  const wsRef = useRef(null);
   const pcRef = useRef(null);
   const channelRef = useRef(null);
 
-  useEffect(() => {
-    wsRef.current = new WebSocket(SIGNAL_SERVER);
-
-    wsRef.current.onmessage = async (event) => {
-      const data = JSON.parse(event.data);
-
-      if (data.type === "offer") {
-        await pcRef.current.setRemoteDescription(data.offer);
-        const answer = await pcRef.current.createAnswer();
-        await pcRef.current.setLocalDescription(answer);
-        wsRef.current.send(JSON.stringify({ type: "answer", answer }));
-      }
-
-      if (data.type === "answer") {
-        await pcRef.current.setRemoteDescription(data.answer);
-      }
-
-      if (data.type === "candidate" && data.candidate) {
-        try {
-          await pcRef.current.addIceCandidate(data.candidate);
-        } catch (e) {
-          console.error("Error al añadir candidato:", e);
-        }
-      }
-    };
-
-    // 2. Crear conexión WebRTC
+  const createRoom = async () => {
     pcRef.current = new RTCPeerConnection();
 
-    // DataChannel
+    // Canal de datos
     channelRef.current = pcRef.current.createDataChannel("chat");
-    channelRef.current.onmessage = (e) => {
-      setMessages((prev) => [...prev, "Peer: " + e.data]);
-    };
+    channelRef.current.onmessage = (e) =>
+      setMessages((m) => [...m, "Peer: " + e.data]);
 
-    pcRef.current.ondatachannel = (event) => {
-      event.channel.onmessage = (e) => {
-        setMessages((prev) => [...prev, "Peer: " + e.data]);
-      };
-    };
-
-    // ICE Candidates
+    // ICE candidates -> Firebase
     pcRef.current.onicecandidate = (event) => {
       if (event.candidate) {
-        wsRef.current.send(
-          JSON.stringify({ type: "candidate", candidate: event.candidate })
-        );
+        const candidatesRef = ref(db, `rooms/${roomId}/callerCandidates`);
+        push(candidatesRef, event.candidate.toJSON());
       }
     };
-  }, []);
 
-  const createOffer = async () => {
+    // Crear la oferta
     const offer = await pcRef.current.createOffer();
     await pcRef.current.setLocalDescription(offer);
-    wsRef.current.send(JSON.stringify({ type: "offer", offer }));
+
+    // Guardar oferta en Firebase
+    await set(ref(db, `rooms/${roomId}`), { offer });
+
+    // Escuchar answer
+    onValue(ref(db, `rooms/${roomId}/answer`), async (snapshot) => {
+      const answer = snapshot.val();
+      if (answer && !pcRef.current.currentRemoteDescription) {
+        await pcRef.current.setRemoteDescription(answer);
+      }
+    });
+
+    // Escuchar candidatos del otro peer
+    onValue(ref(db, `rooms/${roomId}/calleeCandidates`), (snapshot) => {
+      snapshot.forEach(async (child) => {
+        const candidate = new RTCIceCandidate(child.val());
+        await pcRef.current.addIceCandidate(candidate);
+      });
+    });
+  };
+
+  const joinRoom = async () => {
+    pcRef.current = new RTCPeerConnection();
+
+    // Responder mensajes
+    pcRef.current.ondatachannel = (event) => {
+      event.channel.onmessage = (e) =>
+        setMessages((m) => [...m, "Peer: " + e.data]);
+      channelRef.current = event.channel;
+    };
+
+    // ICE candidates -> Firebase
+    pcRef.current.onicecandidate = (event) => {
+      if (event.candidate) {
+        const candidatesRef = ref(db, `rooms/${roomId}/calleeCandidates`);
+        push(candidatesRef, event.candidate.toJSON());
+      }
+    };
+
+    // Leer la oferta
+    onValue(ref(db, `rooms/${roomId}/offer`), async (snapshot) => {
+      const offer = snapshot.val();
+      if (offer) {
+        await pcRef.current.setRemoteDescription(offer);
+
+        const answer = await pcRef.current.createAnswer();
+        await pcRef.current.setLocalDescription(answer);
+
+        await set(ref(db, `rooms/${roomId}/answer`), answer);
+      }
+    });
+
+    // Escuchar candidatos del caller
+    onValue(ref(db, `rooms/${roomId}/callerCandidates`), (snapshot) => {
+      snapshot.forEach(async (child) => {
+        const candidate = new RTCIceCandidate(child.val());
+        await pcRef.current.addIceCandidate(candidate);
+      });
+    });
   };
 
   const sendMessage = () => {
     const msg = "Hola desde este peer 👋";
-    channelRef.current.send(msg);
-    setMessages((prev) => [...prev, "Yo: " + msg]);
+    channelRef.current?.send(msg);
+    setMessages((m) => [...m, "Yo: " + msg]);
   };
 
   return (
     <div>
-      <h1>WebRTC P2P Chat (con señalización mínima)</h1>
-      <button onClick={createOffer}>Iniciar conexión</button>
+      <h1>WebRTC P2P Chat con Firebase</h1>
+      <input
+        placeholder="Room ID"
+        value={roomId}
+        onChange={(e) => setRoomId(e.target.value)}
+      />
+      <button onClick={createRoom}>Crear sala</button>
+      <button onClick={joinRoom}>Unirse a sala</button>
       <button onClick={sendMessage}>Enviar mensaje</button>
       <ul>
         {messages.map((m, i) => (
