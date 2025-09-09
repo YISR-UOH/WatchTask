@@ -30,6 +30,11 @@ const PROFILES_DB = "profilesDB";
 const PROFILES_STORE = "profiles";
 const ORDERS_DB = "pdfDataDB"; // existing orders DB
 const ORDERS_STORE = "pdfData";
+// Simple Safari detection (excludes Chrome on iOS which reports 'CriOS')
+const isSafari =
+  typeof navigator !== "undefined" &&
+  /safari/i.test(navigator.userAgent) &&
+  !/chrome|crios|android/i.test(navigator.userAgent);
 
 // Ensure profiles DB & store
 async function getProfilesDB() {
@@ -435,7 +440,10 @@ export function usePeerMesh({ autoStart = true } = {}) {
   // Create RTCPeerConnection and begin signaling
   const createConnectionToPeer = useCallback(
     (targetId) => {
-      const pc = new RTCPeerConnection();
+      // Add public STUN server to improve ICE discovery (Safari often benefits)
+      const pc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      });
       const setupChannel = (dc) => {
         peerConnectionsRef.current[targetId].dc = dc;
         setPeers((p) => ({
@@ -535,6 +543,22 @@ export function usePeerMesh({ autoStart = true } = {}) {
       if (iAmOfferer) negotiate(targetId);
       listenRemoteOffersAnswers(targetId, pc);
       listenRemoteCandidates(targetId, pc);
+
+      // Safari retry: if after 4s datachannel not open, try to renegotiate once
+      if (isSafari) {
+        setTimeout(() => {
+          const entry = peerConnectionsRef.current[targetId];
+          if (!entry) return;
+          const dcState = entry.dc?.readyState;
+          const connState = entry.pc?.connectionState;
+          if (dcState !== "open" && connState !== "connected") {
+            log(
+              `[safari-retry] Reintentando negociación con ${targetId} dc=${dcState} conn=${connState}`
+            );
+            negotiate(targetId);
+          }
+        }, 4000);
+      }
     },
     [
       log,
