@@ -58,6 +58,9 @@ export function usePeerMesh({ autoStart = true } = {}) {
   const unsubPeersRef = useRef(null);
   const isAdminRef = useRef(false);
   const profileRequestTimerRef = useRef(null); // interval id for requestProfiles retries
+  const pingSeqRef = useRef(0); // incremental sequence para ping
+  const pendingPingsRef = useRef({}); // seq -> timestamp
+  const pingIntervalRef = useRef(null);
 
   // UTIL LOG
   const log = useCallback((m) => setMessages((prev) => [...prev, m]), []);
@@ -148,6 +151,27 @@ export function usePeerMesh({ autoStart = true } = {}) {
             pendingValidationRef.current = null;
             setStatus("login validado (remoto)");
             log("Login validado remotamente");
+          }
+          return;
+        }
+        if (msg.__type === "ping") {
+          const entry = peerConnectionsRef.current[fromId];
+          if (entry?.dc?.readyState === "open") {
+            entry.dc.send(
+              JSON.stringify({ __type: "pong", seq: msg.seq, t: msg.t })
+            );
+          }
+          log(`[ping<-] de ${fromId} seq=${msg.seq}`);
+          return;
+        }
+        if (msg.__type === "pong") {
+          const sent = pendingPingsRef.current[msg.seq];
+          if (sent) {
+            const rtt = Date.now() - sent;
+            delete pendingPingsRef.current[msg.seq];
+            log(`[pong<-] de ${fromId} seq=${msg.seq} rtt=${rtt}ms`);
+          } else {
+            log(`[pong<-] desconocido seq=${msg.seq} de ${fromId}`);
           }
           return;
         }
@@ -321,9 +345,7 @@ export function usePeerMesh({ autoStart = true } = {}) {
             [targetId]: { ...(p[targetId] || {}), state: "open" },
           }));
           log(`Canal abierto con ${targetId}`);
-          if (profile) {
-            dc.send(JSON.stringify({ __type: "profile", profile }));
-          }
+          if (profile) dc.send(JSON.stringify({ __type: "profile", profile }));
           if (
             knownProfiles.length &&
             (profilesSentRef.current[targetId] || 0) < knownProfiles.length
@@ -340,7 +362,6 @@ export function usePeerMesh({ autoStart = true } = {}) {
             );
           }
           if (!knownProfiles.length) {
-            // no tenemos perfiles aún: solicitarlos inmediatamente
             dc.send(JSON.stringify({ __type: "requestProfiles" }));
             log(`[sync:request] requestProfiles inicial a ${targetId}`);
           }
@@ -359,24 +380,26 @@ export function usePeerMesh({ autoStart = true } = {}) {
           }));
       };
 
-      // create outbound channel (caller side) immediately
-      const dataChannel = pc.createDataChannel("mesh");
       peerConnectionsRef.current[targetId] = {
         pc,
-        dc: dataChannel,
+        dc: null,
         makingOffer: false,
       };
       setPeers((p) => ({
         ...p,
         [targetId]: { ...(p[targetId] || {}), state: "connecting" },
       }));
-      setupChannel(dataChannel);
 
-      // handle inbound channel (callee side)
-      pc.ondatachannel = (ev) => {
-        if (!peerConnectionsRef.current[targetId]) return;
-        setupChannel(ev.channel);
-      };
+      const iAmOfferer = peerId < targetId; // deterministic to avoid glare
+      if (iAmOfferer) {
+        const dc = pc.createDataChannel("mesh");
+        setupChannel(dc);
+      } else {
+        pc.ondatachannel = (ev) => {
+          if (!peerConnectionsRef.current[targetId]) return;
+          setupChannel(ev.channel);
+        };
+      }
 
       pc.onicecandidate = (ev) => {
         if (ev.candidate) {
@@ -394,11 +417,20 @@ export function usePeerMesh({ autoStart = true } = {}) {
         }));
       };
 
-      negotiate(targetId);
+      if (iAmOfferer) negotiate(targetId);
       listenRemoteOffersAnswers(targetId, pc);
       listenRemoteCandidates(targetId, pc);
     },
-    [log, profile, peerId, knownProfiles, handleDataMessage]
+    [
+      log,
+      profile,
+      peerId,
+      knownProfiles,
+      handleDataMessage,
+      negotiate,
+      listenRemoteOffersAnswers,
+      listenRemoteCandidates,
+    ]
   );
 
   const negotiate = useCallback(
@@ -492,6 +524,30 @@ export function usePeerMesh({ autoStart = true } = {}) {
       }
     });
   }, [knownProfiles, log]);
+
+  // Ping periódico cada 5s a cada canal abierto
+  useEffect(() => {
+    if (pingIntervalRef.current) return;
+    pingIntervalRef.current = setInterval(() => {
+      Object.entries(peerConnectionsRef.current).forEach(([id, { dc }]) => {
+        if (dc?.readyState === "open") {
+          const seq = ++pingSeqRef.current;
+          const t = Date.now();
+          pendingPingsRef.current[seq] = t;
+          try {
+            dc.send(JSON.stringify({ __type: "ping", seq, t }));
+            log(`[ping->] a ${id} seq=${seq}`);
+          } catch {}
+        }
+      });
+    }, 5000);
+    return () => {
+      if (pingIntervalRef.current) {
+        clearInterval(pingIntervalRef.current);
+        pingIntervalRef.current = null;
+      }
+    };
+  }, [log]);
 
   // Retry loop: si no tenemos perfiles aún, cada 2.5s solicitar a peers abiertos (máx 8 intentos)
   useEffect(() => {
