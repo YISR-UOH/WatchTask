@@ -115,14 +115,7 @@ export function usePeerMesh({ autoStart = true } = {}) {
           // remote solicita base de perfiles
           if (knownProfiles.length) {
             const entry = peerConnectionsRef.current[fromId];
-            const meta = profilesSentRef.current[fromId] || {
-              len: 0,
-              sentOnce: false,
-            };
-            if (
-              entry?.dc?.readyState === "open" &&
-              (!meta.sentOnce || meta.len < knownProfiles.length)
-            ) {
+            if (entry?.dc?.readyState === "open") {
               entry.dc.send(
                 JSON.stringify({
                   __type: "profilesSync",
@@ -134,12 +127,38 @@ export function usePeerMesh({ autoStart = true } = {}) {
                 sentOnce: true,
               };
               log(
-                `[sync:respond] Enviado profilesSync a ${fromId} tras request`
+                `[_sync:respond] ALWAYS profilesSync a ${fromId} len=${knownProfiles.length}`
               );
             }
           }
           return;
         }
+        // Fallback: si en 1s no recibimos nada y tenemos perfiles, forzar envío de nuevo
+        setTimeout(() => {
+          if (!fullSyncedRef.current && knownProfiles.length) {
+            const meta = profilesSentRef.current[targetId] || {
+              len: 0,
+              sentOnce: false,
+            };
+            if (meta.len < knownProfiles.length) {
+              try {
+                dc.send(
+                  JSON.stringify({
+                    __type: "profilesSync",
+                    profiles: knownProfiles,
+                  })
+                );
+                profilesSentRef.current[targetId] = {
+                  len: knownProfiles.length,
+                  sentOnce: true,
+                };
+                log(
+                  `[sync:onopen-fallback] reenviado profilesSync a ${targetId} len=${knownProfiles.length}`
+                );
+              } catch {}
+            }
+          }
+        }, 1000);
         if (msg.__type === "loginValidateRequest") {
           const { code, password } = msg;
           (async () => {
@@ -559,6 +578,50 @@ export function usePeerMesh({ autoStart = true } = {}) {
         );
       }
     });
+  }, [knownProfiles, log]);
+
+  // Broadcast proactivo inicial: durante primeros 15s reintenta cada 3s si detecta peers que aún reportan 0
+  useEffect(() => {
+    if (!knownProfiles.length) return; // nothing to send
+    let elapsed = 0;
+    const intv = setInterval(() => {
+      elapsed += 3000;
+      if (elapsed > 15000) {
+        clearInterval(intv);
+        return;
+      }
+      Object.entries(peerConnectionsRef.current).forEach(([id, { dc }]) => {
+        if (dc?.readyState === "open") {
+          const meta = profilesSentRef.current[id] || {
+            len: 0,
+            sentOnce: false,
+          };
+          const remoteLen = remoteDesiredLenRef.current[id] || 0;
+          if (
+            !meta.sentOnce ||
+            meta.len < knownProfiles.length ||
+            remoteLen === 0
+          ) {
+            try {
+              dc.send(
+                JSON.stringify({
+                  __type: "profilesSync",
+                  profiles: knownProfiles,
+                })
+              );
+              profilesSentRef.current[id] = {
+                len: knownProfiles.length,
+                sentOnce: true,
+              };
+              log(
+                `[sync:proactive] broadcast a ${id} len=${knownProfiles.length}`
+              );
+            } catch {}
+          }
+        }
+      });
+    }, 3000);
+    return () => clearInterval(intv);
   }, [knownProfiles, log]);
 
   // Ping periódico cada 5s a cada canal abierto
