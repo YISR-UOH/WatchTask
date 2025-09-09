@@ -61,6 +61,8 @@ export function usePeerMesh({ autoStart = true } = {}) {
   const pingSeqRef = useRef(0); // incremental sequence para ping
   const pendingPingsRef = useRef({}); // seq -> timestamp
   const pingIntervalRef = useRef(null);
+  const remoteDesiredLenRef = useRef({}); // peerId -> length recibido en último profilesSync
+  const fullSyncedRef = useRef(false);
 
   // UTIL LOG
   const log = useCallback((m) => setMessages((prev) => [...prev, m]), []);
@@ -100,7 +102,13 @@ export function usePeerMesh({ autoStart = true } = {}) {
           return;
         }
         if (msg.__type === "profilesSync" && Array.isArray(msg.profiles)) {
+          const incomingLen = msg.profiles.length;
           msg.profiles.forEach((pf) => storeProfile(pf));
+          remoteDesiredLenRef.current[fromId] = incomingLen;
+          if (knownProfiles.length >= incomingLen) fullSyncedRef.current = true;
+          log(
+            `[sync:recv] profilesSync de ${fromId} len=${incomingLen} local=${knownProfiles.length}`
+          );
           return;
         }
         if (msg.__type === "requestProfiles") {
@@ -425,9 +433,9 @@ export function usePeerMesh({ autoStart = true } = {}) {
               `ProfilesSync enviado onopen a ${targetId} (len=${knownProfiles.length})`
             );
           }
-          if (!knownProfiles.length) {
+          if (!fullSyncedRef.current) {
             dc.send(JSON.stringify({ __type: "requestProfiles" }));
-            log(`[sync:request] requestProfiles inicial a ${targetId}`);
+            log(`[sync:request] requestProfiles onopen a ${targetId}`);
           }
           if (pendingValidationRef.current) {
             const { code, password } = pendingValidationRef.current;
@@ -549,6 +557,38 @@ export function usePeerMesh({ autoStart = true } = {}) {
       }
     };
   }, [log]);
+
+  // Solicitudes periódicas extras de perfiles si aún no estamos fullSynced (cada 4s máx 10 veces)
+  useEffect(() => {
+    if (fullSyncedRef.current) return;
+    let attempts = 0;
+    const intv = setInterval(() => {
+      if (fullSyncedRef.current) {
+        clearInterval(intv);
+        return;
+      }
+      attempts++;
+      Object.entries(peerConnectionsRef.current).forEach(([id, { dc }]) => {
+        if (dc?.readyState === "open") {
+          dc.send(JSON.stringify({ __type: "requestProfiles" }));
+        }
+      });
+      log(`[sync:periodic] requestProfiles extra intento ${attempts}`);
+      const maxRemote = Math.max(
+        0,
+        ...Object.values(remoteDesiredLenRef.current)
+      );
+      if (maxRemote && knownProfiles.length >= maxRemote) {
+        fullSyncedRef.current = true;
+        log(`[sync] completado por periodic len=${knownProfiles.length}`);
+        clearInterval(intv);
+      } else if (attempts >= 10) {
+        clearInterval(intv);
+        log(`[sync:periodic] stop tras 10 intentos`);
+      }
+    }, 4000);
+    return () => clearInterval(intv);
+  }, [knownProfiles, log]);
 
   // Retry loop: si no tenemos perfiles aún, cada 2.5s solicitar a peers abiertos (máx 8 intentos)
   useEffect(() => {
