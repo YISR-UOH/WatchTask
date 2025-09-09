@@ -53,7 +53,8 @@ export function usePeerMesh({ autoStart = true } = {}) {
   const pendingValidationRef = useRef(null); // code awaiting remote validation
 
   const peerConnectionsRef = useRef({}); // peerId -> { pc, dc }
-  const profilesSentRef = useRef({}); // peerId -> boolean
+  // Track last profiles length sent per peer to allow re-sync on additions
+  const profilesSentRef = useRef({}); // peerId -> number (length)
   const unsubPeersRef = useRef(null);
   const isAdminRef = useRef(false);
   const profileRequestTimerRef = useRef(null); // interval id for requestProfiles retries
@@ -103,9 +104,10 @@ export function usePeerMesh({ autoStart = true } = {}) {
           // remote solicita base de perfiles
           if (knownProfiles.length) {
             const entry = peerConnectionsRef.current[fromId];
+            const lastLen = profilesSentRef.current[fromId] || 0;
             if (
               entry?.dc?.readyState === "open" &&
-              !profilesSentRef.current[fromId]
+              lastLen < knownProfiles.length
             ) {
               entry.dc.send(
                 JSON.stringify({
@@ -113,7 +115,7 @@ export function usePeerMesh({ autoStart = true } = {}) {
                   profiles: knownProfiles,
                 })
               );
-              profilesSentRef.current[fromId] = true;
+              profilesSentRef.current[fromId] = knownProfiles.length;
               log(
                 `[sync:respond] Enviado profilesSync a ${fromId} tras request`
               );
@@ -190,6 +192,7 @@ export function usePeerMesh({ autoStart = true } = {}) {
       Object.values(peerConnectionsRef.current).forEach(({ dc }) => {
         if (dc?.readyState === "open") {
           dc.send(JSON.stringify({ __type: "profile", profile: profileObj }));
+          // Forzar posible re-sync completo (el efecto de profiles enviará si length creció)
         }
       });
     },
@@ -204,26 +207,53 @@ export function usePeerMesh({ autoStart = true } = {}) {
       if (!prof) throw new Error("Perfil no encontrado local");
       if (prof.password && prof.password !== password)
         throw new Error("Password incorrecto local");
+      // Si no hay peers conectados (ningún canal abierto / conexión conocida), validar inmediatamente
+      const hasAnyPeer = Object.values(peerConnectionsRef.current).some(
+        ({ dc }) => dc?.readyState === "open" || dc?.readyState === "connecting"
+      );
+      setProfile(prof); // provisional login local
+      isAdminRef.current = prof.role === "admin";
+      if (!hasAnyPeer) {
+        setLoginValidated(true);
+        setStatus("login validado (sin peers)");
+        log("Login validado localmente (no peers disponibles)");
+        return;
+      }
       // solicitar validación remota
       setStatus("validando login remoto");
       pendingValidationRef.current = { code, password };
-      setProfile(prof); // provisional
-      isAdminRef.current = prof.role === "admin";
-      Object.values(peerConnectionsRef.current).forEach(({ dc }) => {
-        if (dc?.readyState === "open") {
-          dc.send(
-            JSON.stringify({ __type: "loginValidateRequest", code, password })
-          );
+      const sendRequest = () => {
+        Object.values(peerConnectionsRef.current).forEach(({ dc }) => {
+          if (dc?.readyState === "open") {
+            dc.send(
+              JSON.stringify({ __type: "loginValidateRequest", code, password })
+            );
+          }
+        });
+      };
+      sendRequest();
+      // Retry up to 3 times if not yet validated
+      let attempts = 0;
+      const interval = setInterval(() => {
+        if (loginValidated) {
+          clearInterval(interval);
+          return;
         }
-      });
-      // Timeout fallback 3s
+        attempts++;
+        sendRequest();
+        if (attempts >= 2) {
+          // total 3 envíos: inicial + 2 retries
+          clearInterval(interval);
+        }
+      }, 1200);
+      // Timeout fallback 4s (un poco más largo para permitir retries)
       setTimeout(() => {
         if (!loginValidated) {
-          setLoginValidated(true); // aceptar si nadie respondió
-          setStatus("login validado (timeout)");
-          log(`Login validado por timeout`);
+          setLoginValidated(true);
+          setStatus("login validado (fallback)");
+          log("Login validado por fallback tras retries");
         }
-      }, 3000);
+      }, 4000);
     },
     [log, loginValidated]
   );
@@ -294,15 +324,20 @@ export function usePeerMesh({ autoStart = true } = {}) {
           if (profile) {
             dc.send(JSON.stringify({ __type: "profile", profile }));
           }
-          if (knownProfiles.length && !profilesSentRef.current[targetId]) {
+          if (
+            knownProfiles.length &&
+            (profilesSentRef.current[targetId] || 0) < knownProfiles.length
+          ) {
             dc.send(
               JSON.stringify({
                 __type: "profilesSync",
                 profiles: knownProfiles,
               })
             );
-            profilesSentRef.current[targetId] = true;
-            log(`ProfilesSync enviado onopen a ${targetId}`);
+            profilesSentRef.current[targetId] = knownProfiles.length;
+            log(
+              `ProfilesSync enviado onopen a ${targetId} (len=${knownProfiles.length})`
+            );
           }
           if (!knownProfiles.length) {
             // no tenemos perfiles aún: solicitarlos inmediatamente
@@ -445,12 +480,15 @@ export function usePeerMesh({ autoStart = true } = {}) {
   useEffect(() => {
     if (!knownProfiles.length) return;
     Object.entries(peerConnectionsRef.current).forEach(([id, { dc }]) => {
-      if (dc?.readyState === "open" && !profilesSentRef.current[id]) {
+      const lastLen = profilesSentRef.current[id] || 0;
+      if (dc?.readyState === "open" && lastLen < knownProfiles.length) {
         dc.send(
           JSON.stringify({ __type: "profilesSync", profiles: knownProfiles })
         );
-        profilesSentRef.current[id] = true;
-        log(`ProfilesSync enviado diferido a ${id}`);
+        profilesSentRef.current[id] = knownProfiles.length;
+        log(
+          `ProfilesSync enviado diferido a ${id} (len=${knownProfiles.length})`
+        );
       }
     });
   }, [knownProfiles, log]);
