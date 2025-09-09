@@ -54,7 +54,7 @@ export function usePeerMesh({ autoStart = true } = {}) {
 
   const peerConnectionsRef = useRef({}); // peerId -> { pc, dc }
   // Track last profiles length sent per peer to allow re-sync on additions
-  const profilesSentRef = useRef({}); // peerId -> number (length)
+  const profilesSentRef = useRef({}); // peerId -> { len:number, sentOnce:boolean }
   const unsubPeersRef = useRef(null);
   const isAdminRef = useRef(false);
   const profileRequestTimerRef = useRef(null); // interval id for requestProfiles retries
@@ -115,10 +115,13 @@ export function usePeerMesh({ autoStart = true } = {}) {
           // remote solicita base de perfiles
           if (knownProfiles.length) {
             const entry = peerConnectionsRef.current[fromId];
-            const lastLen = profilesSentRef.current[fromId] || 0;
+            const meta = profilesSentRef.current[fromId] || {
+              len: 0,
+              sentOnce: false,
+            };
             if (
               entry?.dc?.readyState === "open" &&
-              lastLen < knownProfiles.length
+              (!meta.sentOnce || meta.len < knownProfiles.length)
             ) {
               entry.dc.send(
                 JSON.stringify({
@@ -126,7 +129,10 @@ export function usePeerMesh({ autoStart = true } = {}) {
                   profiles: knownProfiles,
                 })
               );
-              profilesSentRef.current[fromId] = knownProfiles.length;
+              profilesSentRef.current[fromId] = {
+                len: knownProfiles.length,
+                sentOnce: true,
+              };
               log(
                 `[sync:respond] Enviado profilesSync a ${fromId} tras request`
               );
@@ -293,7 +299,12 @@ export function usePeerMesh({ autoStart = true } = {}) {
   // Register this peer presence
   const registerPresence = useCallback(async () => {
     const myRef = ref(db, `${PEERS_PATH}/${peerId}`);
-    await set(myRef, { ts: Date.now(), profileCode: null, profileName: null });
+    await set(myRef, {
+      ts: Date.now(),
+      profileCode: null,
+      profileName: null,
+      profileCount: 0,
+    });
     onDisconnect(myRef)
       .remove()
       .catch(() => {});
@@ -330,6 +341,7 @@ export function usePeerMesh({ autoStart = true } = {}) {
             ...(updated[id] || {}),
             presenceProfileCode: presence.profileCode || null,
             presenceProfileName: presence.profileName || null,
+            presenceProfileCount: presence.profileCount ?? null,
           };
         });
         return updated;
@@ -420,7 +432,13 @@ export function usePeerMesh({ autoStart = true } = {}) {
           if (profile) dc.send(JSON.stringify({ __type: "profile", profile }));
           if (
             knownProfiles.length &&
-            (profilesSentRef.current[targetId] || 0) < knownProfiles.length
+            (() => {
+              const meta = profilesSentRef.current[targetId] || {
+                len: 0,
+                sentOnce: false,
+              };
+              return !meta.sentOnce || meta.len < knownProfiles.length;
+            })()
           ) {
             dc.send(
               JSON.stringify({
@@ -428,9 +446,15 @@ export function usePeerMesh({ autoStart = true } = {}) {
                 profiles: knownProfiles,
               })
             );
-            profilesSentRef.current[targetId] = knownProfiles.length;
+            const previouslySent = profilesSentRef.current[targetId]?.sentOnce;
+            profilesSentRef.current[targetId] = {
+              len: knownProfiles.length,
+              sentOnce: true,
+            };
             log(
-              `ProfilesSync enviado onopen a ${targetId} (len=${knownProfiles.length})`
+              previouslySent
+                ? `ProfilesSync reenviado onopen a ${targetId} (len=${knownProfiles.length})`
+                : `ProfilesSync enviado onopen-first a ${targetId} (len=${knownProfiles.length})`
             );
           }
           if (!fullSyncedRef.current) {
@@ -521,12 +545,15 @@ export function usePeerMesh({ autoStart = true } = {}) {
   useEffect(() => {
     if (!knownProfiles.length) return;
     Object.entries(peerConnectionsRef.current).forEach(([id, { dc }]) => {
-      const lastLen = profilesSentRef.current[id] || 0;
-      if (dc?.readyState === "open" && lastLen < knownProfiles.length) {
+      const meta = profilesSentRef.current[id] || { len: 0, sentOnce: false };
+      if (dc?.readyState === "open" && meta.len < knownProfiles.length) {
         dc.send(
           JSON.stringify({ __type: "profilesSync", profiles: knownProfiles })
         );
-        profilesSentRef.current[id] = knownProfiles.length;
+        profilesSentRef.current[id] = {
+          len: knownProfiles.length,
+          sentOnce: true,
+        };
         log(
           `ProfilesSync enviado diferido a ${id} (len=${knownProfiles.length})`
         );
@@ -673,6 +700,26 @@ export function usePeerMesh({ autoStart = true } = {}) {
     });
   }, [profile, peerId]);
 
+  // Actualizar profileCount en presencia y solicitar si alguien tiene más
+  useEffect(() => {
+    const myRef = ref(db, `${PEERS_PATH}/${peerId}`);
+    update(myRef, { profileCount: knownProfiles.length }).catch(() => {});
+    // Detectar peers con mayor count y pedir sync inmediata
+    Object.entries(peers).forEach(([id, info]) => {
+      if (
+        info.presenceProfileCount != null &&
+        info.presenceProfileCount > knownProfiles.length
+      ) {
+        const entry = peerConnectionsRef.current[id];
+        if (entry?.dc?.readyState === "open") {
+          entry.dc.send(JSON.stringify({ __type: "requestProfiles" }));
+          log(
+            `[sync:catchup] solicito perfiles a ${id} remote=${info.presenceProfileCount} local=${knownProfiles.length}`
+          );
+        }
+      }
+    });
+  }, [knownProfiles.length]);
   return {
     peerId,
     status,
