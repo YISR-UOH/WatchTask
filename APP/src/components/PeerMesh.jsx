@@ -163,12 +163,15 @@ export default function PeerMesh() {
               className="px-2 py-1 bg-blue-50 rounded border border-blue-100"
             >
               <div className="flex justify-between">
-                <span>{p.id.slice(0, 8)}</span>
+                <span>
+                  {p.presenceProfileCode || p.profile?.code || p.id.slice(0, 8)}
+                </span>
                 <span>{p.state}</span>
               </div>
-              {p.profile && (
+              {(p.profile || p.presenceProfileName) && (
                 <div className="text-[10px] mt-1 italic">
-                  {p.profile.name} ({p.profile.role})
+                  {(p.profile?.name || p.presenceProfileName) ?? ""} (
+                  {p.profile?.role || "?"})
                 </div>
               )}
             </li>

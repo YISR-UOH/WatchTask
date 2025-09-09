@@ -231,7 +231,7 @@ export function usePeerMesh({ autoStart = true } = {}) {
   // Register this peer presence
   const registerPresence = useCallback(async () => {
     const myRef = ref(db, `${PEERS_PATH}/${peerId}`);
-    await set(myRef, { ts: Date.now() });
+    await set(myRef, { ts: Date.now(), profileCode: null, profileName: null });
     onDisconnect(myRef)
       .remove()
       .catch(() => {});
@@ -258,6 +258,19 @@ export function usePeerMesh({ autoStart = true } = {}) {
             [id]: { ...(p[id] || {}), state: "offline" },
           }));
         }
+      });
+      // merge presence metadata into peers state for quick recognition
+      setPeers((prev) => {
+        const updated = { ...prev };
+        others.forEach((id) => {
+          const presence = val[id] || {};
+          updated[id] = {
+            ...(updated[id] || {}),
+            presenceProfileCode: presence.profileCode || null,
+            presenceProfileName: presence.profileName || null,
+          };
+        });
+        return updated;
       });
     });
   }, [peerId]);
@@ -509,6 +522,21 @@ export function usePeerMesh({ autoStart = true } = {}) {
     refreshProfiles,
     seedRootAdmin,
   ]);
+
+  // Update presence metadata & broadcast profile when profile changes
+  useEffect(() => {
+    if (!profile) return;
+    const myRef = ref(db, `${PEERS_PATH}/${peerId}`);
+    update(myRef, {
+      profileCode: profile.code || null,
+      profileName: profile.name || null,
+    }).catch(() => {});
+    Object.values(peerConnectionsRef.current).forEach(({ dc }) => {
+      if (dc?.readyState === "open") {
+        dc.send(JSON.stringify({ __type: "profile", profile }));
+      }
+    });
+  }, [profile, peerId]);
 
   return {
     peerId,
