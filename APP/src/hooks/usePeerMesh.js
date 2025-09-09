@@ -329,6 +329,70 @@ export function usePeerMesh({ autoStart = true } = {}) {
     });
   }, [peerId]);
 
+  // Negotiation helpers moved above createConnectionToPeer to avoid TDZ
+  const negotiate = useCallback(
+    async (targetId) => {
+      const entry = peerConnectionsRef.current[targetId];
+      if (!entry) return;
+      const { pc } = entry;
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        const offerRef = ref(db, `${PEERS_PATH}/${targetId}/offers/${peerId}`);
+        await set(offerRef, offer);
+      } catch (e) {
+        log(`Error creando offer a ${targetId}`);
+      }
+    },
+    [log, peerId]
+  );
+
+  const listenRemoteOffersAnswers = useCallback(
+    (targetId, pc) => {
+      const offersRef = ref(db, `${PEERS_PATH}/${peerId}/offers/${targetId}`);
+      onValue(offersRef, async (snap) => {
+        const remoteOffer = snap.val();
+        if (
+          remoteOffer &&
+          (!pc.currentRemoteDescription ||
+            pc.currentRemoteDescription.type !== "offer")
+        ) {
+          await pc.setRemoteDescription(remoteOffer);
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          await set(
+            ref(db, `${PEERS_PATH}/${targetId}/answers/${peerId}`),
+            answer
+          );
+        }
+      });
+      const answersRef = ref(db, `${PEERS_PATH}/${peerId}/answers/${targetId}`);
+      onValue(answersRef, async (snap) => {
+        const remoteAnswer = snap.val();
+        if (remoteAnswer && pc.signalingState === "have-local-offer") {
+          await pc.setRemoteDescription(remoteAnswer);
+        }
+      });
+    },
+    [peerId]
+  );
+
+  const listenRemoteCandidates = useCallback(
+    (targetId, pc) => {
+      const candRef = ref(db, `${PEERS_PATH}/${peerId}/candidates/${targetId}`);
+      onValue(candRef, async (snap) => {
+        const val = snap.val() || {};
+        for (const key of Object.keys(val)) {
+          const c = val[key];
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(c));
+          } catch {}
+        }
+      });
+    },
+    [peerId]
+  );
+
   // Create RTCPeerConnection and begin signaling
   const createConnectionToPeer = useCallback(
     (targetId) => {
@@ -431,69 +495,6 @@ export function usePeerMesh({ autoStart = true } = {}) {
       listenRemoteOffersAnswers,
       listenRemoteCandidates,
     ]
-  );
-
-  const negotiate = useCallback(
-    async (targetId) => {
-      const entry = peerConnectionsRef.current[targetId];
-      if (!entry) return;
-      const { pc } = entry;
-      try {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        const offerRef = ref(db, `${PEERS_PATH}/${targetId}/offers/${peerId}`);
-        await set(offerRef, offer);
-      } catch (e) {
-        log(`Error creando offer a ${targetId}`);
-      }
-    },
-    [log, peerId]
-  );
-
-  const listenRemoteOffersAnswers = useCallback(
-    (targetId, pc) => {
-      const offersRef = ref(db, `${PEERS_PATH}/${peerId}/offers/${targetId}`);
-      onValue(offersRef, async (snap) => {
-        const remoteOffer = snap.val();
-        if (
-          remoteOffer &&
-          (!pc.currentRemoteDescription ||
-            pc.currentRemoteDescription.type !== "offer")
-        ) {
-          await pc.setRemoteDescription(remoteOffer);
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          await set(
-            ref(db, `${PEERS_PATH}/${targetId}/answers/${peerId}`),
-            answer
-          );
-        }
-      });
-      const answersRef = ref(db, `${PEERS_PATH}/${peerId}/answers/${targetId}`);
-      onValue(answersRef, async (snap) => {
-        const remoteAnswer = snap.val();
-        if (remoteAnswer && pc.signalingState === "have-local-offer") {
-          await pc.setRemoteDescription(remoteAnswer);
-        }
-      });
-    },
-    [peerId]
-  );
-
-  const listenRemoteCandidates = useCallback(
-    (targetId, pc) => {
-      const candRef = ref(db, `${PEERS_PATH}/${peerId}/candidates/${targetId}`);
-      onValue(candRef, async (snap) => {
-        const val = snap.val() || {};
-        for (const key of Object.keys(val)) {
-          const c = val[key];
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(c));
-          } catch {} // ignore
-        }
-      });
-    },
-    [peerId]
   );
 
   // Mover arriba para evitar TDZ cuando se usa en setupChannel antes de su inicialización en bundle
