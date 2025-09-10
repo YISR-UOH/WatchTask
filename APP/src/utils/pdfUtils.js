@@ -1,6 +1,5 @@
 import * as pdfjsLib from "pdfjs-dist";
-import { openDB } from "idb";
-
+import { updateOrderDB } from "./APIdb.js";
 // Worker local in public folder
 pdfjsLib.GlobalWorkerOptions.workerSrc = "./pdf.worker.min.js";
 
@@ -369,18 +368,10 @@ async function saveToIndexedDB(jsonData) {
       ...value,
     }));
   }
-  const db = await openDB("pdfDataDB", 1, {
-    upgrade(db) {
-      if (!db.objectStoreNames.contains("pdfData")) {
-        db.createObjectStore("pdfData", { keyPath: "id" });
-      }
-    },
-  });
-  const tx = db.transaction("pdfData", "readwrite");
+
   for (const entry of dataArray) {
-    await tx.store.put(entry);
+    await updateOrderDB(entry);
   }
-  await tx.done;
 }
 
 // Helper: Procesar un archivo PDF y guardar el resultado en IndexedDB

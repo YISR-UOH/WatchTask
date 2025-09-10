@@ -92,3 +92,5 @@ Package.resolved
 # Otros copilot-instructions
 .github/copilot-instructions.md
 fire.json
+instruct.md
+PautasPDFv3.py

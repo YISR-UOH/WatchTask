@@ -14,11 +14,15 @@
     "@tailwindcss/vite": "^4.1.13",
     "firebase": "^12.2.1",
     "idb": "^8.0.3",
+    "mplaynet": "^0.0.5",
     "pdfjs-dist": "^5.4.149",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "tailwindcss": "^4.1.13",
-    "uuid": "^9.0.1"
+    "util": "^0.12.5",
+    "uuid": "^9.0.1",
+    "uuidv7": "^1.0.2",
+    "webconnect": "^0.0.10"
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",
