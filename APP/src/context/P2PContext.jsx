@@ -17,15 +17,14 @@ export function P2PProvider({ children }) {
 
   useEffect(() => {
     function handleOnline() {
-      for (const peerId of peerConnections.keys()) {
-        disconnectPeer(peerId);
-      }
       setOnline(true);
       setPeerConnections(new Map());
       setPeers(new Map());
-      localStorage.removeItem("p2p_peer_id");
       firstConection();
-      obtenerPeers(setPeers);
+      const unsub = obtenerPeers(setPeers);
+      return () => {
+        if (typeof unsub === "function") unsub();
+      };
     }
     function handleOffline() {
       setOnline(false);
