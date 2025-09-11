@@ -84,8 +84,15 @@ export async function crearConexionP2P(
       return !!peerConnections[remoteId];
     })();
 
-    if (!remoteId || alreadyConnected) {
+    if (!remoteId) {
       return reject("Invalid remoteId");
+    }
+    if (alreadyConnected) {
+      const existing =
+        peerConnections instanceof Map
+          ? peerConnections.get(remoteId)
+          : peerConnections[remoteId];
+      if (existing) return resolve(existing);
     }
 
     const pc = new RTCPeerConnection({ iceServers });
@@ -93,13 +100,17 @@ export async function crearConexionP2P(
     let dataChannel = null;
     const cleanupFns = [];
     const attachDataChannel = (dc) => {
-      // Exponer el DataChannel en la instancia para acceso externo
       pc.dataChannel = dc;
       dataChannel = dc;
       dataChannel.onopen = () => {
-        // enviar mensaje hola mundo
-        let message = { type: "greeting", payload: `Hola, mundo! ${myPeerId}` };
-        dataChannel.send(JSON.stringify(message));
+        addPeerConnection(remoteId, pc, setPeerConnections);
+        try {
+          const message = {
+            type: "greeting",
+            payload: `Hola, mundo! ${myPeerId}`,
+          };
+          dataChannel.send(JSON.stringify(message));
+        } catch (_) {}
         cleanupFns.forEach((fn) => {
           try {
             if (typeof fn === "function") fn();
@@ -233,8 +244,7 @@ export async function crearConexionP2P(
       }
     }, 30000);
 
-    // Add to peerConnections map/object
-    addPeerConnection(remoteId, pc, setPeerConnections);
+    // Conexión se añadirá al abrir el DataChannel
   });
 }
 

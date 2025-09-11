@@ -49,7 +49,8 @@ export function registrarPeer(peerId, role = "guest") {
   const peerInfoRef = ref(db, `${ROOM_ID}/${peerId}/peerID`);
   // Importante: no sobreescribir todo el nodo del peer para no borrar offers/answers/ice
   set(peerInfoRef, { role, lastSeen: Date.now() });
-  onDisconnect(peerRef).remove();
+  // Sólo eliminamos la info del peer, no las ofertas/candidatos inmediatamente (permite reconexión breve)
+  onDisconnect(peerInfoRef).remove();
   return peerRef;
 }
 
