@@ -6,14 +6,39 @@ import {
   obtenerPeers,
   enviarOffers,
 } from "@/webrtc/connection";
+import { set } from "firebase/database";
 
 export const P2PContext = createContext();
 
 export function P2PProvider({ children }) {
   const [peerConnections, setPeerConnections] = useState(new Map());
   const [peers, setPeers] = useState(new Map());
+  const [online, setOnline] = useState(navigator.onLine);
+
   useEffect(() => {
-    const a = firstConection();
+    function handleOnline() {
+      for (const peerId of peerConnections.keys()) {
+        disconnectPeer(peerId);
+      }
+      setOnline(true);
+      setPeerConnections(new Map());
+      setPeers(new Map());
+      localStorage.removeItem("p2p_peer_id");
+      firstConection();
+      obtenerPeers(setPeers);
+    }
+    function handleOffline() {
+      setOnline(false);
+    }
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+  useEffect(() => {
+    firstConection();
     const unsub = obtenerPeers(setPeers);
     return () => {
       if (typeof unsub === "function") unsub();
