@@ -6,7 +6,6 @@ import {
   obtenerPeers,
   enviarOffers,
 } from "@/webrtc/connection";
-import { set } from "firebase/database";
 
 export const P2PContext = createContext();
 
@@ -18,13 +17,6 @@ export function P2PProvider({ children }) {
   useEffect(() => {
     function handleOnline() {
       setOnline(true);
-      setPeerConnections(new Map());
-      setPeers(new Map());
-      firstConection();
-      const unsub = obtenerPeers(setPeers);
-      return () => {
-        if (typeof unsub === "function") unsub();
-      };
     }
     function handleOffline() {
       setOnline(false);
