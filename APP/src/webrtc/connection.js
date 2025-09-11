@@ -10,6 +10,7 @@ import {
 } from "@/signaling/firebaseSignaling";
 import { syncDatosPublicos } from "@/db/sync";
 import { uuidv7 } from "uuidv7";
+import { startPeerHeartbeat } from "@/signaling/firebaseSignaling";
 
 // Configuración ICE (p.ej. servidores STUN públicos)
 // TODO: existen otros?, buscar implementacion propia?
@@ -37,6 +38,8 @@ export const myPeerId = (() => {
 export function firstConection() {
   if (!myPeerId) return;
   const register = registrarPeer(myPeerId);
+  // iniciar heartbeat lastSeen
+  startPeerHeartbeat(myPeerId);
   return register;
 }
 

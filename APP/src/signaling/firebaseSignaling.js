@@ -54,6 +54,15 @@ export function registrarPeer(peerId, role = "guest") {
   return peerRef;
 }
 
+// Heartbeat para actualizar lastSeen periódicamente
+export function startPeerHeartbeat(peerId, intervalMs = 15000) {
+  const peerInfoRef = ref(db, `${ROOM_ID}/${peerId}/peerID/lastSeen`);
+  const tick = () => set(peerInfoRef, Date.now()).catch(() => {});
+  const id = setInterval(tick, intervalMs);
+  tick();
+  return () => clearInterval(id);
+}
+
 /**
  * sendOffer: envía un SDP offer a otro peer vía RTDB.
  * - entradas: fromId, toId, sdpOffer (objeto SDP).
@@ -74,10 +83,11 @@ export function listarPeers(setNewPeer, myPeerId) {
   const peersRef = ref(db, `${ROOM_ID}`);
   const unsub = onChildAdded(peersRef, (snapshot) => {
     const peerId = snapshot.key;
-    if (peerId && peerId !== myPeerId) {
-      const peerData = snapshot.val().peerID;
-      setNewPeer((prev) => new Map(prev).set(peerId, peerData));
-    }
+    if (!peerId || peerId === myPeerId) return;
+    const val = snapshot.val();
+    const peerMeta = val && val.peerID;
+    if (!peerMeta) return; // ignorar nodos huérfanos sin metadata
+    setNewPeer((prev) => new Map(prev).set(peerId, peerMeta));
   });
   return () => unsub();
 }
@@ -96,10 +106,14 @@ export function sendAnswer(ownId, remoteId, sdpAnswer) {
  */
 export function listenOffers(ownId, onReceive) {
   const offersRef = ref(db, `${ROOM_ID}/${ownId}/offers`);
+  const processed = new Set();
   const unsub = onChildAdded(offersRef, (snapshot) => {
     const key = snapshot.key;
     if (!key) return;
+    if (processed.has(key)) return;
+    processed.add(key);
     onReceive(key, snapshot.val());
+    remove(snapshot.ref).catch(() => {}); // Eliminar la oferta tras procesarla
   });
   return () => unsub();
 }
@@ -110,10 +124,14 @@ export function listenOffers(ownId, onReceive) {
  */
 export function listenAnswers(ownId, onReceive) {
   const answersRef = ref(db, `${ROOM_ID}/${ownId}/answers`);
+  const processed = new Set();
   const unsub = onChildAdded(answersRef, (snapshot) => {
     const key = snapshot.key;
     if (!key) return;
+    if (processed.has(key)) return;
+    processed.add(key);
     onReceive(key, snapshot.val());
+    remove(snapshot.ref).catch(() => {}); // Eliminar la respuesta tras procesarla
   });
   return () => unsub();
 }
@@ -133,6 +151,7 @@ export function sendIceCandidate(fromId, toId, candidate) {
 export function listenIceCandidates(ownId, onReceive) {
   const iceRef = ref(db, `${ROOM_ID}/${ownId}/ice`);
   const perSenderUnsubs = new Map();
+  const processed = new Set(); // fromId|candidateKey
 
   const unsubSenders = onChildAdded(iceRef, (senderSnap) => {
     const fromId = senderSnap.key;
@@ -141,9 +160,14 @@ export function listenIceCandidates(ownId, onReceive) {
     const candidatesRef = ref(db, `${ROOM_ID}/${ownId}/ice/${fromId}`);
     const unsubCand = onChildAdded(candidatesRef, (candSnap) => {
       const candidate = candSnap.val();
+      const key = `${fromId}|${candSnap.key}`;
+      if (processed.has(key)) return;
+      processed.add(key);
       onReceive(fromId, candidate);
-      // limpiar candidato consumido para evitar relecturas
-      remove(candSnap.ref).catch(() => {});
+      // Eliminar el candidato tras procesarlo para evitar reprocesamientos
+      remove(candSnap.ref).catch(() => {
+        console.log("No se pudo eliminar candidato ICE");
+      });
     });
     perSenderUnsubs.set(fromId, unsubCand);
   });
