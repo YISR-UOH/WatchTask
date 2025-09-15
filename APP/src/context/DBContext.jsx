@@ -9,21 +9,6 @@ export function DBProvider({ children }) {
   const [publicDB, setPublicDB] = useState([]);
   // contiene los perfiles, hashes, roles replicados entre peers
 
-  // Inicializa la base local al montar
-  useEffect(() => {
-    (async () => {
-      await openDB("p2p_app", 1, (db) => {
-        if (!db.objectStoreNames.contains("public_users")) {
-          db.createObjectStore("public_users", { keyPath: "username" });
-        }
-        if (!db.objectStoreNames.contains("tasks")) {
-          db.createObjectStore("tasks", { keyPath: "id" });
-        }
-      });
-      setDbReady(true);
-    })();
-  }, []);
-
   // 📌 Funciones expuestas por el contexto
 
   /**

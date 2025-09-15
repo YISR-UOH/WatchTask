@@ -7,7 +7,9 @@ import {
   remove,
   onDisconnect,
   push,
+  get,
 } from "firebase/database";
+import { UUID } from "uuidv7";
 
 // TODO : en produccion usar ENV vars
 const firebaseConfig = {
@@ -31,147 +33,190 @@ const db = getDatabase(app);
  *  ice: { from_to: [candidates] }
  * }
  */
-const STRUCTURE = {
-  peerID: {},
-  offers: {},
-  answers: {},
-  ice: {},
-};
 const ROOM_ID = "Cartocor";
+
 /**
- * registrarPeer: añade el peer actual al listado en RTDB y revisa que otros peers estén activos.
- * - entradas: peerId (cadena única)
- * - salidas: referencia de RTDB al path del peer.
- * - consideraciones: usar onDisconnect() para eliminar al desconectarse.
+ * addPeer
+ *  añade el peer actual al listado en RTDB y revisa que otros peers estén activos.
+ * @param {UUID} peerId Identificador único del peer
+ * @param {String} role identificador del rol del peer (guest, admin, supervisor, mantenedor)
+ * @returns {void}
  */
-export function registrarPeer(peerId, role = "guest") {
-  const peerRef = ref(db, `${ROOM_ID}/${peerId}`);
+export function addPeer(peerId, user = { role: "guest" }) {
   const peerInfoRef = ref(db, `${ROOM_ID}/${peerId}/peerID`);
-  // Importante: no sobreescribir todo el nodo del peer para no borrar offers/answers/ice
-  set(peerInfoRef, { role, lastSeen: Date.now() });
-  // Sólo eliminamos la info del peer, no las ofertas/candidatos inmediatamente (permite reconexión breve)
+  // Return the set promise so callers can await persistence if needed
+  user.lastSeen = Date.now();
+  const p = set(peerInfoRef, user);
   onDisconnect(peerInfoRef).remove();
-  return peerRef;
-}
-
-// Heartbeat para actualizar lastSeen periódicamente
-export function startPeerHeartbeat(peerId, intervalMs = 15000) {
-  const peerInfoRef = ref(db, `${ROOM_ID}/${peerId}/peerID/lastSeen`);
-  const tick = () => set(peerInfoRef, Date.now()).catch(() => {});
-  const id = setInterval(tick, intervalMs);
-  tick();
-  return () => clearInterval(id);
+  return p;
 }
 
 /**
- * sendOffer: envía un SDP offer a otro peer vía RTDB.
- * - entradas: fromId, toId, sdpOffer (objeto SDP).
- * - salidas: Promise de la operación de escritura.
- * - consideraciones: formamos una clave combinada para identificar emisor y receptor.
+ * sendOffer
+ *  envía un SDP offer a otro peer vía RTDB.
+ * @param {UUID} peerId Identificador único del peer
+ * @param {UUID} remoteId Identificador único del peer de destino
+ * @param {RTCSessionDescription} sdpOffer SDP offer
+ * @returns {Promise<void>}
  */
-export function sendOffer(myPeerId, remoteId, sdpOffer) {
-  return set(ref(db, `${ROOM_ID}/${remoteId}/offers/${myPeerId}`), sdpOffer);
+export function sendOffer(peerId, remoteId, sdpOffer) {
+  return set(ref(db, `${ROOM_ID}/${remoteId}/offers/${peerId}`), sdpOffer);
 }
 
 /**
- * Funcion para listar peers en la sala y actualizar la lista en tiempo real.
- * - entrada: callback onNewPeer(setNewPeer, myPeerId)
- * * setNewPeer es un Map
- * - salidas: función para desuscribirse del listener.
+ * sendIceCandidate
+ *  envía candidato ICE a otro peer.
+ * @param {UUID} peerId Identificador único del peer
+ * @param {UUID} remoteId Identificador único del peer remoto
+ * @param {RTCIceCandidate} candidate Identificador único del peer remoto
+ * @returns {Promise<void>}
  */
-export function listarPeers(setNewPeer, myPeerId) {
+export function sendIceCandidate(peerId, remoteId, candidate) {
+  return push(ref(db, `${ROOM_ID}/${remoteId}/ice/${peerId}`), candidate);
+}
+
+/**
+ * sendAnswer
+ *  listar peers en la sala y actualizar la lista en tiempo real.
+ * @param {useState<Map<any, any>>} setNewPeer mapa de peers
+ * @param {UUID} peerId Identificador único del peer
+ * @param {RTCSessionDescription} sdpAnswer SDP answer
+ * @returns {Promise<void>}
+ */
+export function sendAnswer(peerId, remoteId, sdpAnswer) {
+  return set(ref(db, `${ROOM_ID}/${remoteId}/answers/${peerId}`), sdpAnswer);
+}
+
+/**
+ * SearchPeers
+ *  listar peers en la sala buscando un ADMIN -> SUPERVISOR -> MANTENEDOR.
+ * @param {useState<Map<any, any>>} setNewPeer mapa de peers
+ * @param {UUID} peerId Identificador único del peer
+ */
+export async function SearchPeers(peerId) {
+  const peersRef = ref(db, `${ROOM_ID}`);
+  let selectedPeer = null;
+  try {
+    const snapshot = await get(peersRef);
+    if (!snapshot.exists()) return null;
+    const data = snapshot.val();
+    let selectedRole = null;
+    Object.entries(data).forEach(([id, info]) => {
+      if (id === peerId) return;
+      if (!info.peerID || !info.peerID.role) return;
+      const role = info.peerID.role;
+      if (role === "admin") {
+        selectedPeer = id;
+        selectedRole = role;
+        return;
+      } else if (role === "supervisor" && selectedRole !== "admin") {
+        selectedPeer = id;
+        selectedRole = role;
+      } else if (role === "mantenedor" && !selectedRole) {
+        selectedPeer = id;
+        selectedRole = role;
+      }
+    });
+    return selectedPeer;
+  } catch (err) {
+    console.error("SearchPeers error:", err);
+    return null;
+  }
+}
+/**
+ * listarPeers
+ *  listar peers en la sala y actualizar la lista en tiempo real.
+ * @param {useState<Map<any, any>>} setNewPeer mapa de peers
+ * @param {UUID} peerId Identificador único del peer
+ * @returns {Function} función para desuscribirse del listener.
+ */
+export function listarPeers(setNewPeer, peerId) {
   const peersRef = ref(db, `${ROOM_ID}`);
   const unsub = onChildAdded(peersRef, (snapshot) => {
-    const peerId = snapshot.key;
-    if (!peerId || peerId === myPeerId) return;
+    const remoteId = snapshot.key;
+    if (!remoteId || remoteId === peerId) return;
     const val = snapshot.val();
     const peerMeta = val && val.peerID;
     if (!peerMeta) return; // ignorar nodos huérfanos sin metadata
-    setNewPeer((prev) => new Map(prev).set(peerId, peerMeta));
+    setNewPeer((prev) => new Map(prev).set(remoteId, peerMeta));
   });
   return () => unsub();
 }
 
 /**
- * sendAnswer: responde a una oferta con un SDP answer.
- * - entradas: fromId (este peer), toId (quien pidió conexión), sdpAnswer.
- * - salidas: Promise de escritura.
+ * listenOffers
+ *  listar las ofertas dirigidas a este peer.
+ * @param {UUID} peerId Identificador único del peer
+ * @param {onReceive} onReceive callback para procesar la oferta (remoteId, sdpOffer)
+ * @returns {Function} función para desuscribirse del listener.
  */
-export function sendAnswer(ownId, remoteId, sdpAnswer) {
-  return set(ref(db, `${ROOM_ID}/${remoteId}/answers/${ownId}`), sdpAnswer);
-}
-/**
- * listenOffers: escucha ofertas dirigidas a este peer.
- * - entrada: ownId, callback onReceive(fromId, sdpOffer).
- */
-export function listenOffers(ownId, onReceive) {
-  const offersRef = ref(db, `${ROOM_ID}/${ownId}/offers`);
+export function listenOffers(peerId, onReceive) {
+  const offersRef = ref(db, `${ROOM_ID}/${peerId}/offers`);
   const processed = new Set();
   const unsub = onChildAdded(offersRef, (snapshot) => {
-    const key = snapshot.key;
-    if (!key) return;
-    if (processed.has(key)) return;
-    processed.add(key);
-    onReceive(key, snapshot.val());
+    const remoteId = snapshot.key;
+    if (!remoteId) return;
+    if (processed.has(remoteId)) return;
+    processed.add(remoteId);
+    onReceive(remoteId, snapshot.val());
     remove(snapshot.ref).catch(() => {}); // Eliminar la oferta tras procesarla
   });
   return () => unsub();
 }
 
 /**
- * listenAnswers: escucha respuestas dirigidas a este peer.
- * - entrada: ownId, callback onReceive(fromId, sdpAnswer).
+ * listenAnswers
+ *  listar las answers dirigidas a este peer.
+ * @param {UUID} peerId Identificador único del peer
+ * @param {onReceive} onReceive callback para procesar la oferta (remoteId, sdpAnswer)
+ * @returns {Function} función para desuscribirse del listener.
  */
-export function listenAnswers(ownId, onReceive) {
-  const answersRef = ref(db, `${ROOM_ID}/${ownId}/answers`);
+export function listenAnswers(peerId, onReceive) {
+  const answersRef = ref(db, `${ROOM_ID}/${peerId}/answers`);
   const processed = new Set();
   const unsub = onChildAdded(answersRef, (snapshot) => {
-    const key = snapshot.key;
-    if (!key) return;
-    if (processed.has(key)) return;
-    processed.add(key);
-    onReceive(key, snapshot.val());
-    remove(snapshot.ref).catch(() => {}); // Eliminar la respuesta tras procesarla
+    const remoteId = snapshot.key;
+    if (!remoteId) return;
+    if (processed.has(remoteId)) return;
+    processed.add(remoteId);
+    onReceive(remoteId, snapshot.val());
+    remove(snapshot.ref).catch(() => {});
   });
   return () => unsub();
-}
-
-/**
- * sendIceCandidate: envía candidato ICE a otro peer.
- * - entradas: fromId, toId, candidate (objeto ICE).
- */
-export function sendIceCandidate(fromId, toId, candidate) {
-  return push(ref(db, `${ROOM_ID}/${toId}/ice/${fromId}`), candidate);
 }
 
 /**
  * listenIceCandidates: escucha ICE candidates dirigidos a este peer.
  * - entrada: ownId, callback onReceive(fromId, candidate).
  */
-export function listenIceCandidates(ownId, onReceive) {
-  const iceRef = ref(db, `${ROOM_ID}/${ownId}/ice`);
+/**
+ * listenIceCandidates
+ *  listar los ICE candidates dirigidas a este peer.
+ * @param {UUID} peerId Identificador único del peer
+ * @param {onReceive} onReceive callback para procesar la oferta (remoteId, candidate)
+ * @returns {Function} función para desuscribirse del listener.
+ */
+export function listenIceCandidates(peerId, onReceive) {
+  const iceRef = ref(db, `${ROOM_ID}/${peerId}/ice`);
   const perSenderUnsubs = new Map();
-  const processed = new Set(); // fromId|candidateKey
-
+  const processed = new Set();
   const unsubSenders = onChildAdded(iceRef, (senderSnap) => {
-    const fromId = senderSnap.key;
-    if (!fromId) return;
+    const remoteId = senderSnap.key;
+    if (!remoteId) return;
 
-    const candidatesRef = ref(db, `${ROOM_ID}/${ownId}/ice/${fromId}`);
+    const candidatesRef = ref(db, `${ROOM_ID}/${peerId}/ice/${remoteId}`);
     const unsubCand = onChildAdded(candidatesRef, (candSnap) => {
       const candidate = candSnap.val();
-      const key = `${fromId}|${candSnap.key}`;
+      const key = `${remoteId}|${candSnap.key}`;
       if (processed.has(key)) return;
       processed.add(key);
-      onReceive(fromId, candidate);
-      // Eliminar el candidato tras procesarlo para evitar reprocesamientos
+      onReceive(remoteId, candidate);
       remove(candSnap.ref).catch(() => {
         console.log("No se pudo eliminar candidato ICE");
       });
     });
-    perSenderUnsubs.set(fromId, unsubCand);
+    perSenderUnsubs.set(remoteId, unsubCand);
   });
-
   return () => {
     try {
       unsubSenders();

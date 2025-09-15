@@ -1,93 +1,79 @@
-import React, { createContext, useState, useEffect, use } from "react";
+import React, { createContext, useState, useEffect, useContext } from "react";
 import {
-  myPeerId,
-  crearConexionP2P,
   firstConection,
-  obtenerPeers,
-  enviarOffers,
+  myPeerId,
+  connectWithPeer,
+  ListenWebRTC,
 } from "@/webrtc/connection";
-
+import { AuthContext } from "@/context/AuthContext";
+import { openDB, saveData } from "@/db/indexedDB";
+import { addPeer } from "@/signaling/firebaseSignaling";
+import { hashHex } from "@/utils/hash";
 export const P2PContext = createContext();
 
 export function P2PProvider({ children }) {
-  const [peerConnections, setPeerConnections] = useState(new Map());
-  const [peers, setPeers] = useState(new Map());
   const [online, setOnline] = useState(navigator.onLine);
+  const { checking, user, role, setUser } = useContext(AuthContext);
 
   useEffect(() => {
-    function handleOnline() {
-      setOnline(true);
-    }
-    function handleOffline() {
-      setOnline(false);
-    }
+    const handleOnline = () => setOnline(true);
+    const handleOffline = () => setOnline(false);
+
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
+
     return () => {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
     };
   }, []);
-  useEffect(() => {
-    firstConection();
-    const unsub = obtenerPeers(setPeers);
-    return () => {
-      if (typeof unsub === "function") unsub();
-    };
-  }, []);
-  useEffect(() => {
-    // Intenta iniciar conexiones para todos los peers conocidos
-    enviarOffers(peers, peerConnections, setPeerConnections);
-  }, [peers]);
 
-  /**
-   * connectToPeer: inicia una conexión WebRTC con otro peer.
-   * - entrada: peerId (identificador del peer remoto).
-   * - salidas: instancia de RTCPeerConnection creada y almacenada en context.
-   * - consideraciones: usa crearConexionP2P() del módulo webrtc; registra event handlers.
-   */
-  async function connectToPeer(peerId) {
-    const pc = await crearConexionP2P(
-      peerId,
-      peerConnections,
-      setPeerConnections
-    );
-  }
-
-  function disconnectPeer(peerId) {
-    const pc =
-      peerConnections instanceof Map
-        ? peerConnections.get(peerId)
-        : peerConnections && peerConnections[peerId];
-    if (!pc) return;
-    try {
-      pc.close();
-    } catch (_) {}
-    setPeerConnections((prev) => {
-      if (prev instanceof Map) {
-        const next = new Map(prev);
-        next.delete(peerId);
-        return next;
+  const tryFirstConnection = async () => {
+    if (!checking && online && !user) {
+      let a = await firstConection();
+      if (!a) {
+        // openDB = (name, version)
+        await openDB("WatchTaskDB");
+        const hashedPassword = await hashHex("0000");
+        const user = {
+          code: "0000",
+          name: "Administrador",
+          hashPassword: hashedPassword,
+          role: "ADMIN",
+          speciality: "",
+          active: true,
+        };
+        await saveData("public_users", user);
       }
-      const updated = { ...(prev || {}) };
-      delete updated[peerId];
-      return updated;
-    });
-  }
-
-  async function sendMessage(peerId, data) {
-    const pc =
-      peerConnections instanceof Map
-        ? peerConnections.get(peerId)
-        : peerConnections && peerConnections[peerId];
-    if (pc && pc.dataChannel && pc.dataChannel.readyState === "open") {
-      pc.dataChannel.send(JSON.stringify(data));
+      if (a) {
+        await connectWithPeer(a);
+      }
+    } else if (checking && online && user) {
+      const mypeerID = await myPeerId;
+      setUser({
+        user: user.user,
+        code: user.code,
+        peerId: mypeerID,
+      });
+      let a = await addPeer(myPeerId, {
+        user: user.user,
+        code: user.code,
+        peerId: mypeerID,
+        role: role.toLowerCase(),
+      });
+      await ListenWebRTC();
     }
-  }
+  };
+
+  useEffect(() => {
+    tryFirstConnection();
+  }, [checking, online]);
 
   return (
     <P2PContext.Provider
-      value={{ peerConnections, connectToPeer, disconnectPeer, sendMessage }}
+      value={{
+        online,
+      }}
     >
       {children}
     </P2PContext.Provider>
