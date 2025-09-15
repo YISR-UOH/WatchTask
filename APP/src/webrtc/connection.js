@@ -15,7 +15,7 @@ import { uuidv7 } from "uuidv7";
 // Configuración ICE (p.ej. servidores STUN públicos)
 // Nota: Para entornos NAT estrictos se necesita TURN. Aquí ampliamos la lista de STUN.
 const iceServers = [
-  { urls: "stun.services.mozilla.com:3478" },
+  { urls: "stun:stun.services.mozilla.com:3478" },
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
   { urls: "stun:stun2.l.google.com:19302" },
